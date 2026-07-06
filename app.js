@@ -713,6 +713,10 @@ function historyEntries(t){
   (t.comments||[]).forEach(c=>items.push({at:c.at, actor:c.email||c.author, badge:c.internal?'Internal comment':'Public reply', html:`Comment: ${renderMentions(c.text)}`}));
   const pill=v=>`<span class="hist-pill">${esc(v)}</span>`;
   (t.history_audit||[]).forEach(h=>{ if(h.field==='comment') return;
+    if(h.field==='resolution'||h.field==='closure'){   // resolve/close: show reason, category + the note
+      items.push({at:h.at, actor:agentName(h.by)||h.by, badge: h.field==='resolution'?'Resolved':'Closed',
+        html:`<b>Reason:</b> ${esc(h.reason)} &nbsp;·&nbsp; <b>Category:</b> ${esc(h.category)}${h.note?`<div class="c-body" style="margin-top:6px">${esc(h.note)}</div>`:''}`});
+      return; }
     const label = h.field==='assigned_to'?'Assigned':h.field==='group_assigned_to'?'Group':titleCase(h.field);
     items.push({at:h.at, actor:agentName(h.by)||h.by, badge:'', html:`<b>${esc(label)}:</b> ${pill(h.old)} → ${pill(h.neu)}`}); });
   items.push({at:t.created_at, actor:t.created_by, badge:'', html:`${t.created_by==='Auto Created'?'Ticket Auto-created':'Ticket created'}${t.assigned_name?`<div style="margin-top:6px"><b>Assigned:</b> ${pill('N/A')} → ${pill(t.assigned_name)}</div>`:''}`});
@@ -757,7 +761,11 @@ function openResolveCloseModal(t, mode, oldStatus, selectEl){
     const nw = isResolve?'RESOLVED':'CLOSED';
     t.resolution={type:nw, reason, category, note, by:CURRENT_USER.name, at:new Date()};
     transitionStatus(t, oldStatus, nw);
-    pushHistory(t, isResolve?'resolution':'closure', titleCase(oldStatus), `${reason} · ${category}`);
+    // record the resolution/closure details — reason, category AND the note — in history
+    t.history_audit=t.history_audit||[];
+    t.history_audit.unshift({field:isResolve?'resolution':'closure', old:titleCase(oldStatus), neu:titleCase(nw),
+      by:CURRENT_USER.email, at:new Date(), reason, category, note});
+    t.updated_at=new Date();
     closeModal(); paintListKeepScroll(); toast(title.replace('Ticket','')+'d', `${reason} · ${category}`);
   };
 }
