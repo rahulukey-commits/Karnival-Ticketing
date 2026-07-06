@@ -3,3 +3,7 @@
 node_modules/
 .vscode/
 scratchpad/
+*.bak
+actions.js
+modules.js
+exploration-notes.md

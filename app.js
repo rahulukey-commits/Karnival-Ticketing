@@ -21,6 +21,7 @@ const slaBadge = t => { if(!t.escalation_info && !t.is_overdue) return '';
   return `<span class="badge ${t.is_overdue?'sla-breach':'sla-ok'}">${t.is_overdue?'SLA Breached':'On Track'}</span>`; };
 const initials = n => (n||'?').trim().split(/\s+/).map(x=>x[0]).slice(0,2).join('').toUpperCase();
 const agentName = e => (AGENTS.find(a=>a.email===e)||{}).name || e || '—';
+const CURRENT_USER = {email:'rahul.ukey@karnival.com', name:'Rahul Ukey'};   // logged-in agent (RU)
 
 function toast(title,msg,kind='ok'){
   const ico = kind==='ok'?'✅':kind==='warn'?'⚠️':'ℹ️';
@@ -51,10 +52,34 @@ function openSheet(){
 }
 function closeSheet(){ const ov=$('#overlay'); ov.classList.remove('show'); ov.innerHTML=''; document.body.style.overflow=''; }
 function router(){
-  const hash = location.hash.slice(1) || 'home';
+  let hash = location.hash.slice(1) || 'home';
+  if(hash.startsWith('/')) hash = hash.slice(1);
+  hash = hash.split('?')[0].replace(/\/$/,'') || 'home';
+
+  /* nav highlight + auto-open owning accordion group */
+  $$('.nav-child').forEach(n=>n.classList.toggle('active', n.dataset.route===hash));
+  $$('.nav-item[data-route]').forEach(n=>n.classList.toggle('active', n.dataset.route===hash));
+  const activeChild = $$('.nav-child').find(n=>n.dataset.route===hash);
+  if(activeChild){
+    const grp = activeChild.closest('.nav-group');
+    if(grp && !grp.classList.contains('open')){
+      $$('.nav-group').forEach(g=>g.classList.remove('open'));
+      grp.classList.add('open');
+    }
+  }
+
+  /* full-page module routes (Survey Analytics / CX Report / Live Dashboard / POS Uploads) */
+  if(typeof MODULE_ROUTES!=='undefined' && FULLPAGE_ROUTES.includes(hash)){
+    closeSheet(); MODULE_ROUTES[hash](); return;
+  }
+  if(typeof M!=='undefined' && M.closeFull) M.closeFull();
+
+  /* inline module routes (everything except ticketing) */
+  if(typeof MODULE_ROUTES!=='undefined' && MODULE_ROUTES[hash]){
+    closeSheet(); MODULE_ROUTES[hash](); view.scrollTop=0; window.scrollTo(0,0); return;
+  }
+
   const [route, param] = hash.split('/');
-  $$('.nav-child').forEach(n=>n.classList.toggle('active', n.dataset.route===route));
-  $$('.nav-item[data-route]').forEach(n=>n.classList.toggle('active', n.dataset.route===route));
   renderHome();                                    // base layer always present
   if(route==='home'){ closeSheet(); return; }
   openSheet();
@@ -75,38 +100,50 @@ function go(h){ location.hash = h; }
 
 /* ============================================================ PORTAL HOME (Bill Overview) */
 function renderHome(){
+  const boFilters = `
+      <div class="bo-filters">
+        <select class="select"><option>Overall</option></select>
+        <select class="select" disabled><option>Sales Person</option></select>
+        <select class="select"><option>Daily</option></select>
+        <select class="select"><option>Last 28 Days</option></select>
+      </div>`;
   view.innerHTML=`
     <div class="home-strip">
-      <div class="home-tile"><span class="ht-label">Live Stores</span><span class="ht-val">1</span></div>
-      <div class="home-tile"><span class="ht-label">Live POS</span><span class="ht-val">1</span></div>
+      <div class="home-tile"><span class="ht-label">Live Stores</span><span class="ht-val">0</span></div>
+      <div class="home-tile"><span class="ht-label">Live POS</span><span class="ht-val">0</span></div>
     </div>
     <div class="home-card">
       <h3>Bill Overview</h3>
-      <div class="bo-filters">
-        <select class="select"><option>Overall</option></select>
-        <select class="select"><option>Sales Person</option></select>
-        <select class="select"><option>Daily</option></select>
-        <select class="select"><option>Last 28 Days</option></select>
-      </div>
+      ${boFilters}
       <div class="bo-grid">
-        <div class="bo-cell"><div class="boc-l">Total Bills Generated</div><div class="boc-v">—</div></div>
-        <div class="bo-cell green"><div class="boc-l">Digital Bills Only</div><div class="boc-v">—</div></div>
-        <div class="bo-cell amber"><div class="boc-l">Digital Bills + Printed</div><div class="boc-v">—</div></div>
-        <div class="bo-cell red"><div class="boc-l">Printed Only</div><div class="boc-v">—</div></div>
+        <div class="bo-cell"><div class="boc-l">Total Bills Generated</div><div class="boc-v">-</div></div>
+        <div class="bo-cell green"><div class="boc-l">Digital Bills Only</div><div class="boc-v">-</div></div>
+        <div class="bo-cell amber"><div class="boc-l">Digital Bills + Printed</div><div class="boc-v">-</div></div>
+        <div class="bo-cell red"><div class="boc-l">Printed Only</div><div class="boc-v">-</div></div>
       </div>
-      <div class="bo-grid" style="grid-template-columns:1fr 1fr">
-        <div class="bo-cell"><div class="boc-l">Bill Open</div><div class="boc-v">2</div></div>
-        <div class="bo-cell"><div class="boc-l">Revenue</div><div class="boc-v">—</div></div>
+      <div class="bo-grid" style="grid-template-columns:1fr 1fr 2fr">
+        <div class="bo-cell"><div class="boc-l">Bill Open</div><div class="boc-v">90</div></div>
+        <div class="bo-cell"><div class="boc-l">Revenue</div><div class="boc-v">-</div></div>
+        <div></div>
       </div>
-      <div class="legend" style="margin:18px 0 6px">
-        <div class="lg"><span class="dot" style="background:#a855f7"></span>Bill Stats</div>
-        <div class="lg"><span class="dot" style="background:#38bdf8"></span>Bill Open Stats</div>
-        <div class="lg"><span class="dot" style="background:#eab308"></span>Email Stats</div>
-        <div class="lg"><span class="dot" style="background:#22c55e"></span>SMS Stats</div>
-        <div class="lg"><span class="dot" style="background:#f97316"></span>Unique Bill View Stats</div>
+      <div class="legend" style="margin:18px 0 6px;justify-content:center">
+        <div class="lg"><span class="sq" style="background:#a855f7"></span>Bill Stats</div>
+        <div class="lg"><span class="sq" style="background:#38bdf8"></span>Bill Open Stats</div>
+        <div class="lg"><span class="sq" style="background:#eab308"></span>Email Stats</div>
+        <div class="lg"><span class="sq" style="background:#22c55e"></span>SMS Stats</div>
+        <div class="lg"><span class="sq" style="background:#f97316"></span>Unique Bill View Stats</div>
       </div>
-      ${Charts.line([{label:'Bill Stats',data:TREND.open,color:'#eab308'},{label:'Unique Bill View',data:TREND.res,color:'#f97316'}],{x:TREND.dates})}
-      <div class="page-sub" style="margin-top:14px">Tip: open <b>Ticketing → All Tickets</b> from the sidebar to manage support tickets.</div>
+      ${Charts.line([{label:'Bill Open Stats',data:TREND.open,color:'#38bdf8'},{label:'Unique Bill View Stats',data:TREND.res,color:'#f97316'}],{x:TREND.dates})}
+    </div>
+    <div class="home-card">
+      <h3>Invoices Count Summary (B2C Sales)</h3>
+      ${boFilters}
+      <div class="m-empty" style="padding:70px 0">Not Enough Data</div>
+    </div>
+    <div class="home-card">
+      <h3>📊 Sales Overview</h3>
+      ${boFilters}
+      <div class="m-empty" style="padding:70px 0">Not Enough Data</div>
     </div>`;
 }
 
@@ -557,7 +594,8 @@ function ticketDetailHTML(t){
       <div class="panel"><div class="kv-l">Customer</div>${t.customer_info?`<div class="cust-line" style="margin-top:8px"><div class="avatar">${initials(t.customer_info.name)}</div>
         <div><div class="c-name">${esc(maskName(t,t.customer_info.name))}</div><div class="c-sub">${esc(maskPhone(t,t.customer_info.phone))}</div><div class="c-sub">${esc(maskEmail(t,t.customer_info.email))}</div></div></div>`:'<div class="page-sub">No customer linked</div>'}</div>
       <div class="panel"><div class="kv-l">Assigned To</div>
-        <select class="select" id="dvAssignee" style="background:#fff;margin-top:8px"><option value="">Unassigned</option>${AGENTS.map(a=>`<option value="${a.email}" ${t.assigned_to===a.email?'selected':''}>${a.name}</option>`).join('')}</select></div>
+        <select class="select" id="dvAssignee" style="background:#fff;margin-top:8px"><option value="">Unassigned</option>${AGENTS.map(a=>`<option value="${a.email}" ${t.assigned_to===a.email?'selected':''}>${a.name}</option>`).join('')}</select>
+        <button class="btn btn-light btn-sm" id="dvAssignMe" style="margin-top:8px" ${t.assigned_to===CURRENT_USER.email?'disabled':''}>👤 Assign to me</button></div>
 
       <div class="panel"><div class="kv-l">👤 Collaborators</div><select class="select" id="dvCollab" style="background:#fff;margin-top:8px"><option value="">Collaborators</option>${AGENTS.map(a=>`<option value="${a.email}">${a.name}</option>`).join('')}</select><div id="collabChips" style="margin-top:8px"></div></div>
       <div class="panel"><div class="kv-l">👥 Group Collaborators</div><select class="select" id="dvGroup" style="background:#fff;margin-top:8px"><option value="">Group Collaborators</option>${GROUPS.map(g=>`<option>${g}</option>`).join('')}</select><div id="groupChips" style="margin-top:8px"></div></div>
@@ -589,6 +627,7 @@ function wireDetail(t){
   $('#dvPriority').onchange=e=>{const old=t.ticket_priority;t.ticket_priority=e.target.value.toUpperCase();pushHistory(t,'priority',titleCase(old),titleCase(t.ticket_priority));toast('Priority updated',titleCase(t.ticket_priority));};
   $('#dvStatus').onchange=e=>{const old=t.ticket_status;const nw=e.target.value.toUpperCase().replace(/ /g,'_');transitionStatus(t,old,nw);paintListKeepScroll();};
   $('#dvAssignee').onchange=e=>{t.assigned_to=e.target.value;t.assigned_name=agentName(e.target.value);pushHistory(t,'assigned_to','—',t.assigned_name);toast('Reassigned',t.assigned_name);LOGS.unshift({at:new Date(),ticket:t.ticket_number,event:'ASSIGNED',actor:'Rahul Ukey',detail:'Assigned to '+t.assigned_name});};
+  if($('#dvAssignMe')) $('#dvAssignMe').onclick=(e)=>{e.stopPropagation();const old=t.assigned_name||'—';t.assigned_to=CURRENT_USER.email;t.assigned_name=CURRENT_USER.name;pushHistory(t,'assigned_to',old,CURRENT_USER.name);LOGS.unshift({at:new Date(),ticket:t.ticket_number,event:'ASSIGNED',actor:CURRENT_USER.name,detail:'Self-assigned to '+CURRENT_USER.name});paintListKeepScroll();toast('Assigned to you',CURRENT_USER.name);};
   if($('#dvGroupAssign')) $('#dvGroupAssign').onchange=e=>{t.group_assigned_to=e.target.value||null;pushHistory(t,'group_assigned_to','—',t.group_assigned_to||'—');toast('Group assignment updated',t.group_assigned_to||'Cleared');};
   $('#dvDue').onchange=e=>{t.due_date=new Date(e.target.value);t.is_overdue=t.due_date<new Date();toast('Due date set',fmtDT(t.due_date));};
   $('#editTitle').onclick=()=>{const v=prompt('Edit ticket title',t.title);if(v&&v.trim()){t.title=v.trim();paintListKeepScroll();toast('Title updated');}};
@@ -874,9 +913,16 @@ function closeModal(){ $('#modalRoot').classList.remove('show'); $('#modalRoot')
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('#modalRoot').classList.contains('show'))closeModal();});
 
 /* ============================================================ NAV + BOOT */
-$('#ticketingParent').onclick=()=>$('#ticketingGroup').classList.toggle('open');
+/* accordion — one group open at a time, exactly like the live portal */
+$$('.nav-parent').forEach(p=>p.onclick=()=>{
+  const grp=p.closest('.nav-group'), wasOpen=grp.classList.contains('open');
+  $$('.nav-group').forEach(g=>g.classList.remove('open'));
+  if(!wasOpen) grp.classList.add('open');
+});
 $('#navToggle').onclick=()=>$('#sidebar').classList.toggle('collapsed');
 $$('.nav-child').forEach(n=>n.onclick=()=>go(n.dataset.route));
-$$('[data-route]').forEach(n=>{if(n.classList.contains('nav-item'))n.onclick=()=>go(n.dataset.route);});
+$$('[data-route]').forEach(n=>{if(n.classList.contains('nav-item')&&!n.classList.contains('nav-parent'))n.onclick=()=>go(n.dataset.route);});
 window.go=go;
+window.router=router;
+if(typeof M!=='undefined' && M.bootShell) M.bootShell();
 router();

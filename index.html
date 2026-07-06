@@ -3,12 +3,18 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Karnival · Ticketing</title>
+  <title>Karnival · Dashboard</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=21" />
+  <link rel="stylesheet" href="styles.css?v=31" />
 </head>
 <body>
+  <!-- ===== Update banner (appears like the real app) ===== -->
+  <div class="update-banner" id="updateBanner" hidden>
+    <span>Minor update available ✨ (Some features will not be usable until you update)</span>
+    <button id="updateBtn">Update</button>
+  </div>
+
   <!-- ===== Top bar ===== -->
   <header class="topbar">
     <div class="topbar-left">
@@ -31,25 +37,39 @@
       </div>
     </div>
     <div class="topbar-right">
-      <button class="brand-switch">
-        <span>Allen Solly</span>
-        <svg viewBox="0 0 24 24" width="16" height="16"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
+      <div class="brand-wrap">
+        <button class="brand-switch" id="brandSwitch">
+          <span id="brandName">Athlete's Co AG</span>
+          <svg viewBox="0 0 24 24" width="16" height="16"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="brand-menu" id="brandMenu" hidden></div>
+      </div>
       <div class="avatar avatar-me">RU</div>
     </div>
   </header>
 
   <div class="app-body">
-    <!-- ===== Sidebar ===== -->
+    <!-- ===== Sidebar (accordion — one group open at a time) ===== -->
     <aside class="sidebar" id="sidebar">
-      <nav class="nav">
+      <nav class="nav" id="nav">
         <a class="nav-item" data-route="home"><span class="nav-ico">🏠</span><span class="nav-label">Home</span></a>
-        <div class="nav-item nav-disabled"><span class="nav-ico">👥</span><span class="nav-label">CX Management</span><span class="nav-caret">⌄</span></div>
 
-        <div class="nav-group open" id="ticketingGroup">
-          <div class="nav-item nav-parent" id="ticketingParent">
-            <span class="nav-ico">🎫</span><span class="nav-label">Ticketing</span><span class="nav-caret">⌃</span>
+        <div class="nav-group" data-group="cx">
+          <div class="nav-item nav-parent"><span class="nav-ico">👥</span><span class="nav-label">CX Management</span><span class="nav-caret">⌄</span></div>
+          <div class="nav-children">
+            <a class="nav-child" data-route="survey-designer/list">Surveys</a>
+            <a class="nav-child" data-route="dashboard-creator">Dashboard Creator</a>
+            <a class="nav-child" data-route="forms">Forms</a>
+            <a class="nav-child" data-route="nps">NPS/Feedback</a>
+            <a class="nav-child" data-route="crm-feedback">Feedback Ticketing</a>
+            <a class="nav-child" data-route="opt-in">Opt-In</a>
+            <a class="nav-child" data-route="kpi">KPI</a>
+            <a class="nav-child" data-route="surveys">Surveys (Legacy)</a>
           </div>
+        </div>
+
+        <div class="nav-group" data-group="ticketing">
+          <div class="nav-item nav-parent"><span class="nav-ico">🎫</span><span class="nav-label">Ticketing</span><span class="nav-caret">⌄</span></div>
           <div class="nav-children">
             <a class="nav-child" data-route="tickets">All Tickets</a>
             <a class="nav-child" data-route="projects">Projects</a>
@@ -61,13 +81,162 @@
           </div>
         </div>
 
-        <div class="nav-item nav-disabled"><span class="nav-ico">🎁</span><span class="nav-label">Loyalty</span><span class="nav-caret">⌄</span></div>
-        <div class="nav-item nav-disabled"><span class="nav-ico">📣</span><span class="nav-label">CRM Campaigns</span><span class="nav-caret">⌄</span></div>
-        <div class="nav-item nav-disabled"><span class="nav-ico">🖥️</span><span class="nav-label">Website</span><span class="nav-caret">⌄</span></div>
-        <div class="nav-item nav-disabled"><span class="nav-ico">🧾</span><span class="nav-label">POS</span><span class="nav-caret">⌄</span></div>
-        <div class="nav-item nav-disabled"><span class="nav-ico">🖼️</span><span class="nav-label">UGC</span><span class="nav-caret">⌄</span></div>
-        <div class="nav-item nav-disabled"><span class="nav-ico">📊</span><span class="nav-label">Analytics</span><span class="nav-caret">⌄</span></div>
-        <div class="nav-item nav-disabled"><span class="nav-ico">⚙️</span><span class="nav-label">Settings</span><span class="nav-caret">⌄</span></div>
+        <div class="nav-group" data-group="loyalty">
+          <div class="nav-item nav-parent"><span class="nav-ico">🎁</span><span class="nav-label">Loyalty</span><span class="nav-caret">⌄</span></div>
+          <div class="nav-children">
+            <div class="nav-section">RAFFLE</div>
+            <a class="nav-child" data-route="raffle/campaign/list">Campaign</a>
+            <a class="nav-child" data-route="raffle/campaign/draw">Draw</a>
+            <a class="nav-child" data-route="raffle/campaign/winners">Winners List</a>
+          </div>
+        </div>
+
+        <div class="nav-group" data-group="crm">
+          <div class="nav-item nav-parent"><span class="nav-ico">📣</span><span class="nav-label">CRM Campaigns</span><span class="nav-caret">⌄</span></div>
+          <div class="nav-children">
+            <a class="nav-child" data-route="journey-builder">Campaign Builder</a>
+            <a class="nav-child" data-route="sr-offers">SR Offers</a>
+            <a class="nav-child" data-route="carousel-campaigns">Carousel Campaigns</a>
+            <a class="nav-child" data-route="offer-creator">Coupon Vault</a>
+            <a class="nav-child" data-route="web-app">Smart Web App</a>
+            <a class="nav-child" data-route="dynamic-qr">Dynamic QR</a>
+          </div>
+        </div>
+
+        <div class="nav-group" data-group="website">
+          <div class="nav-item nav-parent"><span class="nav-ico">🖥️</span><span class="nav-label">Website</span><span class="nav-caret">⌄</span></div>
+          <div class="nav-children">
+            <a class="nav-child" data-route="testimonials">Testimonials</a>
+            <a class="nav-child" data-route="collections">Collections</a>
+          </div>
+        </div>
+
+        <div class="nav-group" data-group="pos">
+          <div class="nav-item nav-parent"><span class="nav-ico">🧾</span><span class="nav-label">POS</span><span class="nav-caret">⌄</span></div>
+          <div class="nav-children">
+            <a class="nav-child" data-route="pos/cogs">COGS</a>
+            <a class="nav-child" data-route="pos/inventory">Inventory</a>
+            <a class="nav-child" data-route="pos/reports">Reports</a>
+            <a class="nav-child" data-route="pos/uploads">Uploads</a>
+          </div>
+        </div>
+
+        <div class="nav-group" data-group="ugc">
+          <div class="nav-item nav-parent"><span class="nav-ico">🖼️</span><span class="nav-label">UGC</span><span class="nav-caret">⌄</span></div>
+          <div class="nav-children">
+            <a class="nav-child" data-route="ugc/reviews">Reviews</a>
+            <a class="nav-child" data-route="ugc/instagram">Instagram</a>
+            <a class="nav-child" data-route="ugc/uploaded">Uploaded</a>
+            <a class="nav-child" data-route="ugc/albums">Albums</a>
+            <a class="nav-child" data-route="ugc/visualize">Visualize</a>
+          </div>
+        </div>
+
+        <div class="nav-group" data-group="pi">
+          <div class="nav-item nav-parent"><span class="nav-ico">🔥</span><span class="nav-label">Product Insights</span><span class="nav-caret">⌄</span></div>
+          <div class="nav-children">
+            <a class="nav-child" data-route="products/catalogue">Catalogue</a>
+            <a class="nav-child" data-route="products/analytics">Analytics</a>
+            <a class="nav-child" data-route="products/moderation">Moderation</a>
+            <a class="nav-child" data-route="products/setup">Setup</a>
+          </div>
+        </div>
+
+        <div class="nav-group" data-group="customers">
+          <div class="nav-item nav-parent"><span class="nav-ico">👤</span><span class="nav-label">Customers</span><span class="nav-caret">⌄</span></div>
+          <div class="nav-children">
+            <a class="nav-child" data-route="customers/registration">Registration</a>
+            <a class="nav-child" data-route="customers/audiences">Audiences</a>
+          </div>
+        </div>
+
+        <div class="nav-group" data-group="utilities">
+          <div class="nav-item nav-parent"><span class="nav-ico">🛠️</span><span class="nav-label">Utilities</span><span class="nav-caret">⌄</span></div>
+          <div class="nav-children">
+            <a class="nav-child" data-route="uploads">Uploads</a>
+          </div>
+        </div>
+
+        <div class="nav-group" data-group="analytics">
+          <div class="nav-item nav-parent"><span class="nav-ico">📊</span><span class="nav-label">Analytics</span><span class="nav-caret">⌄</span></div>
+          <div class="nav-children">
+            <a class="nav-child" data-route="store-analytics/stores">Store</a>
+            <a class="nav-child" data-route="profile-updates">Customer Profile</a>
+            <a class="nav-child" data-route="retention">Retention</a>
+            <a class="nav-child" data-route="communication-analytics">Communication</a>
+            <a class="nav-child" data-route="survey-analytics">Survey Analytics</a>
+            <a class="nav-child" data-route="monthly-cx-insights">CX Report</a>
+            <a class="nav-child" data-route="live-dashboard">Live Dashboard</a>
+          </div>
+        </div>
+
+        <div class="nav-group" data-group="reports">
+          <div class="nav-item nav-parent"><span class="nav-ico">📈</span><span class="nav-label">Reports</span><span class="nav-caret">⌄</span></div>
+          <div class="nav-children">
+            <a class="nav-child" data-route="reports/reports">Reports</a>
+            <a class="nav-child" data-route="reports/downloads">Downloads</a>
+            <a class="nav-child" data-route="reports/report-mailer">Report Mailer</a>
+          </div>
+        </div>
+
+        <div class="nav-group" data-group="audits">
+          <div class="nav-item nav-parent"><span class="nav-ico">🔍</span><span class="nav-label">Audits</span><span class="nav-caret">⌄</span></div>
+          <div class="nav-children">
+            <a class="nav-child" data-route="audit/transactions">Transactions</a>
+            <a class="nav-child" data-route="audit/sms">SMS</a>
+            <a class="nav-child" data-route="audit/WhatsApp">WhatsApp</a>
+            <a class="nav-child" data-route="audit/email">Email</a>
+            <a class="nav-child" data-route="audit/survey-audit">Survey</a>
+          </div>
+        </div>
+
+        <div class="nav-group" data-group="design">
+          <div class="nav-item nav-parent"><span class="nav-ico">🎨</span><span class="nav-label">Design</span><span class="nav-caret">⌄</span></div>
+          <div class="nav-children">
+            <a class="nav-child" data-route="brand-onboarding/bill-design">Bill Design</a>
+            <a class="nav-child" data-route="email-design">Email Design</a>
+            <a class="nav-child" data-route="smart-popup">Smart Popup</a>
+          </div>
+        </div>
+
+        <div class="nav-group" data-group="settings">
+          <div class="nav-item nav-parent"><span class="nav-ico">⚙️</span><span class="nav-label">Settings</span><span class="nav-caret">⌄</span></div>
+          <div class="nav-children">
+            <a class="nav-child" data-route="settings">General</a>
+            <a class="nav-child" data-route="settings/account-details">Account Defaults</a>
+            <a class="nav-child" data-route="settings/activity-logs">Activity Logs</a>
+            <div class="nav-section">MONITORING</div>
+            <a class="nav-child" data-route="monitoring/health-check">Live Health Check</a>
+            <div class="nav-section">ADMIN SETUP</div>
+            <a class="nav-child" data-route="settings/store-config">Store Config</a>
+            <a class="nav-child" data-route="settings/sales-person-config">Sales Person Config</a>
+            <a class="nav-child" data-route="settings/groups">Groups</a>
+            <a class="nav-child" data-route="settings/webhooks">Webhooks</a>
+            <a class="nav-child" data-route="settings/profile-data">Profile Data</a>
+            <a class="nav-child" data-route="settings/admin-reports">Admin Reports</a>
+            <a class="nav-child" data-route="settings/report-management">Report Management</a>
+            <div class="nav-section">USER MANAGEMENT</div>
+            <a class="nav-child" data-route="settings/user-management-listing">Users</a>
+            <a class="nav-child" data-route="settings/user-management/roles">Roles</a>
+            <div class="nav-section">COMMUNICATION SETUP</div>
+            <a class="nav-child" data-route="settings/communication-setup/sms">SMS Setup</a>
+            <a class="nav-child" data-route="settings/communication-setup/whatsapp">WhatsApp Setup</a>
+            <a class="nav-child" data-route="settings/communication-setup/email">Email Setup</a>
+            <a class="nav-child" data-route="settings/communication-setup/rcs">RCS Setup</a>
+            <div class="nav-section">FILTER LISTS</div>
+            <a class="nav-child" data-route="settings/email-blocklist">E-mail</a>
+            <a class="nav-child" data-route="settings/sms-blocklist">Mobile</a>
+            <a class="nav-child" data-route="settings/domain">Domain</a>
+            <a class="nav-child" data-route="settings/unblock-user">Manage Blocked Users</a>
+            <div class="nav-section">SYSTEM SETUP</div>
+            <a class="nav-child" data-route="settings/organization-config">Organization Config</a>
+            <a class="nav-child" data-route="settings/brand-config">Brand Config</a>
+            <a class="nav-child" data-route="settings/path-mapping">Path Mapping</a>
+            <a class="nav-child" data-route="settings/ui-config">UI Config</a>
+            <a class="nav-child" data-route="settings/health-config">Health Config</a>
+            <a class="nav-child" data-route="settings/user-management">User Management</a>
+          </div>
+        </div>
       </nav>
     </aside>
 
@@ -75,8 +244,18 @@
     <main class="content" id="view"></main>
   </div>
 
+  <!-- ===== App footer (social + version, like the real portal) ===== -->
+  <footer class="app-footer">
+    <div class="foot-social">
+      <span title="Facebook">ⓕ</span><span title="Instagram">◙</span><span title="Twitter">𝕏</span><span title="LinkedIn">in</span>
+    </div>
+    <div class="foot-ver">v2.86.0</div>
+  </footer>
+
   <!-- ===== Ticketing sheet overlay mount ===== -->
   <div class="overlay" id="overlay"></div>
+  <!-- ===== Full-page layer mount (Survey Analytics / CX Report / Live Dashboard / Uploads / Generate Reports) ===== -->
+  <div class="fullpage" id="fullpage" hidden></div>
   <!-- ===== Modal mount ===== -->
   <div class="modal-root" id="modalRoot"></div>
   <!-- ===== Toast mount ===== -->
@@ -84,8 +263,9 @@
   <!-- floating help -->
   <button class="fab-help" title="Help">💬</button>
 
-  <script src="data.js?v=21"></script>
-  <script src="charts.js?v=21"></script>
-  <script src="app.js?v=21"></script>
+  <script src="data.js?v=31"></script>
+  <script src="charts.js?v=31"></script>
+  <script src="modules.js?v=31"></script>
+  <script src="app.js?v=31"></script>
 </body>
 </html>
