@@ -595,7 +595,9 @@ function ticketDetailHTML(t){
         <div><div class="c-name">${esc(maskName(t,t.customer_info.name))}</div><div class="c-sub">${esc(maskPhone(t,t.customer_info.phone))}</div><div class="c-sub">${esc(maskEmail(t,t.customer_info.email))}</div></div></div>`:'<div class="page-sub">No customer linked</div>'}</div>
       <div class="panel"><div class="kv-l">Assigned To</div>
         <select class="select" id="dvAssignee" style="background:#fff;margin-top:8px"><option value="">Unassigned</option>${AGENTS.map(a=>`<option value="${a.email}" ${t.assigned_to===a.email?'selected':''}>${a.name}</option>`).join('')}</select>
-        <button class="btn btn-light btn-sm" id="dvAssignMe" style="margin-top:8px" ${t.assigned_to===CURRENT_USER.email?'disabled':''}>👤 Assign to me</button></div>
+        ${t.assigned_to===CURRENT_USER.email
+          ? `<button class="btn btn-light btn-sm" id="dvAssignMe" style="margin-top:8px" disabled>✓ Assigned to you</button>`
+          : `<button class="btn btn-light btn-sm" id="dvAssignMe" style="margin-top:8px">👤 Assign to me</button>`}</div>
 
       <div class="panel"><div class="kv-l">👤 Collaborators</div><select class="select" id="dvCollab" style="background:#fff;margin-top:8px"><option value="">Collaborators</option>${AGENTS.map(a=>`<option value="${a.email}">${a.name}</option>`).join('')}</select><div id="collabChips" style="margin-top:8px"></div></div>
       <div class="panel"><div class="kv-l">👥 Group Collaborators</div><select class="select" id="dvGroup" style="background:#fff;margin-top:8px"><option value="">Group Collaborators</option>${GROUPS.map(g=>`<option>${g}</option>`).join('')}</select><div id="groupChips" style="margin-top:8px"></div></div>
