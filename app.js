@@ -531,12 +531,18 @@ function slaPill(t){
 }
 function billStrip(t){
   if(!t.bill_id) return '';
-  return `<div class="panel bill-strip" style="margin-top:14px"><div class="row" style="gap:34px">
-    <div class="bs-ico">🧾</div>
-    <div><div class="kv-l">Bill Number:</div><div style="font-weight:600">#${esc(t.bill_id)}</div></div>
-    <div><div class="kv-l">Amount:</div><div style="font-weight:600">${esc(t.amount||'—')}</div></div>
-    <div><div class="kv-l">Receipt Date:</div><div style="font-weight:600">${t.receipt_date?fmtDT(t.receipt_date):'—'}</div></div>
-    <div class="spacer"></div><span style="color:var(--muted);font-size:18px">⌄</span></div></div>`;
+  const items=t.line_items||[];
+  return `<div class="panel bill-strip" style="margin-top:14px">
+    <div class="row" id="billToggle" style="gap:34px;cursor:${items.length?'pointer':'default'}">
+      <div class="bs-ico">🧾</div>
+      <div><div class="kv-l">Bill Number:</div><div style="font-weight:600">#${esc(t.bill_id)}</div></div>
+      <div><div class="kv-l">Amount:</div><div style="font-weight:600">${esc(t.amount||'—')}</div></div>
+      <div><div class="kv-l">Receipt Date:</div><div style="font-weight:600">${t.receipt_date?fmtDT(t.receipt_date):'—'}</div></div>
+      <div class="spacer"></div>${items.length?`<span id="billChevron" style="color:var(--muted);font-size:18px">⌄</span>`:''}</div>
+    ${items.length?`<div id="billItems" style="display:none;margin-top:14px;border-top:1px solid var(--line-2);padding-top:12px">
+      <table class="tbl" style="border:none"><thead><tr><th style="background:none">Product</th><th style="background:none">No of Units</th><th style="background:none">Unit Price</th><th style="background:none">Total Amount</th></tr></thead>
+      <tbody>${items.map(li=>`<tr><td style="font-weight:600">${esc(li.product)}</td><td>${li.units}</td><td>${esc(li.unitPrice)}</td><td style="font-weight:700">${esc(li.total)}</td></tr>`).join('')}</tbody></table></div>`:''}
+  </div>`;
 }
 function sentBadge(s){ return `<span class="badge ${s==='Detractor'?'p-high':s==='Promoter'?'b-resolved':'p-medium'}">${esc(s)}</span>`; }
 function deriveSent(t){ if(t.sentiment) return t.sentiment; const n=parseInt(t.score); return isNaN(n)?'':(n<=6?'Detractor':n<=8?'Passive':'Promoter'); }
@@ -627,7 +633,10 @@ const maskPhone=(t,p)=>t.hide_personal_data&&p?'+'+p.slice(0,2)+'****'+p.slice(-
 
 function wireDetail(t){
   $('#dvPriority').onchange=e=>{const old=t.ticket_priority;t.ticket_priority=e.target.value.toUpperCase();pushHistory(t,'priority',titleCase(old),titleCase(t.ticket_priority));toast('Priority updated',titleCase(t.ticket_priority));};
-  $('#dvStatus').onchange=e=>{const old=t.ticket_status;const nw=e.target.value.toUpperCase().replace(/ /g,'_');transitionStatus(t,old,nw);paintListKeepScroll();};
+  $('#dvStatus').onchange=e=>{const old=t.ticket_status;const nw=e.target.value.toUpperCase().replace(/ /g,'_');
+    if(nw==='RESOLVED'){ openResolveCloseModal(t,'resolve',old,e.target); return; }
+    if(nw==='CLOSED'){ openResolveCloseModal(t,'close',old,e.target); return; }
+    transitionStatus(t,old,nw);paintListKeepScroll();};
   $('#dvAssignee').onchange=e=>{t.assigned_to=e.target.value;t.assigned_name=agentName(e.target.value);pushHistory(t,'assigned_to','—',t.assigned_name);toast('Reassigned',t.assigned_name);LOGS.unshift({at:new Date(),ticket:t.ticket_number,event:'ASSIGNED',actor:'Rahul Ukey',detail:'Assigned to '+t.assigned_name});};
   if($('#dvAssignMe')) $('#dvAssignMe').onclick=(e)=>{e.stopPropagation();const old=t.assigned_name||'—';t.assigned_to=CURRENT_USER.email;t.assigned_name=CURRENT_USER.name;pushHistory(t,'assigned_to',old,CURRENT_USER.name);LOGS.unshift({at:new Date(),ticket:t.ticket_number,event:'ASSIGNED',actor:CURRENT_USER.name,detail:'Self-assigned to '+CURRENT_USER.name});paintListKeepScroll();toast('Assigned to you',CURRENT_USER.name);};
   if($('#dvGroupAssign')) $('#dvGroupAssign').onchange=e=>{t.group_assigned_to=e.target.value||null;pushHistory(t,'group_assigned_to','—',t.group_assigned_to||'—');toast('Group assignment updated',t.group_assigned_to||'Cleared');};
@@ -648,7 +657,8 @@ function wireDetail(t){
     if(e.target.closest('.panel,input,select,textarea,button,a,.tab,.rt,.sel-chip,[data-rmt],.inv-chip,label')) return;
     go('tickets');
   };
-  if($('#viewSurvey')) $('#viewSurvey').onclick=()=>toast('Survey',`Opening survey for ${t.ticket_number}`);
+  if($('#viewSurvey')) $('#viewSurvey').onclick=(e)=>{e.stopPropagation();openSurveyDrawer(t);};
+  if($('#billToggle')) $('#billToggle').onclick=(e)=>{e.stopPropagation();const li=$('#billItems');if(li){const open=li.style.display!=='none';li.style.display=open?'none':'block';$('#billChevron').textContent=open?'⌄':'⌃';}};
 }
 function transitionStatus(t,old,nw){
   t.ticket_status=nw; pushHistory(t,'status',titleCase(old),titleCase(nw));
@@ -701,15 +711,84 @@ function paintTab(t){
 function historyEntries(t){
   const items=[];
   (t.comments||[]).forEach(c=>items.push({at:c.at, actor:c.email||c.author, badge:c.internal?'Internal comment':'Public reply', html:`Comment: ${renderMentions(c.text)}`}));
+  const pill=v=>`<span class="hist-pill">${esc(v)}</span>`;
   (t.history_audit||[]).forEach(h=>{ if(h.field==='comment') return;
-    items.push({at:h.at, actor:agentName(h.by)||h.by, badge:'', html:`<b>${esc(titleCase(h.field))}</b>: ${esc(h.old)} → <b>${esc(h.neu)}</b>`}); });
-  items.push({at:t.created_at, actor:t.created_by, badge:'', html: t.created_by==='Auto Created'?'Ticket Auto-created':'Ticket created'});
+    const label = h.field==='assigned_to'?'Assigned':h.field==='group_assigned_to'?'Group':titleCase(h.field);
+    items.push({at:h.at, actor:agentName(h.by)||h.by, badge:'', html:`<b>${esc(label)}:</b> ${pill(h.old)} → ${pill(h.neu)}`}); });
+  items.push({at:t.created_at, actor:t.created_by, badge:'', html:`${t.created_by==='Auto Created'?'Ticket Auto-created':'Ticket created'}${t.assigned_name?`<div style="margin-top:6px"><b>Assigned:</b> ${pill('N/A')} → ${pill(t.assigned_name)}</div>`:''}`});
   return items.sort((a,b)=>b.at-a.at);
 }
 function pj2(t){return PROJECTS.find(p=>p.project_id===t.project_id)||PROJECTS[0];}
 function commentHTML(c){return `<div class="comment"><div class="avatar">${initials(c.author)}</div>
   <div style="flex:1"><div class="c-head"><span class="c-author">${esc(c.author)}</span><span class="c-time">${fmtDateAbs(c.at)}</span></div>
   <div class="c-body">${renderMentions(c.text)}</div></div></div>`;}
+
+/* Resolve / Close ticket modal — required when status → RESOLVED or CLOSED (manual & auto tickets) */
+function openResolveCloseModal(t, mode, oldStatus, selectEl){
+  const isResolve = mode==='resolve';
+  const title = isResolve ? 'Resolve Ticket' : 'Close Ticket';
+  const reasons = isResolve ? RESOLVING_REASONS : CLOSING_REASONS;
+  const verbNoun = isResolve ? 'Resolving' : 'Closing';
+  const lastComment = (t.comments||[]).slice(-1)[0];
+  let reason='', category='', note='';
+  const revert=()=>{ if(selectEl) selectEl.value = titleCase(oldStatus); };
+  openModal(`<div class="modal-head"><div class="mh-ico">${isResolve?'✓':'🔒'}</div><h2>${title}</h2><button class="modal-close" data-close>×</button></div>
+    <div class="modal-body">
+      <label class="lbl">Previous Comments &amp; Activity</label>
+      <div class="field" style="height:auto;min-height:44px;background:var(--field);padding:10px 12px;color:var(--ink-2)">${lastComment?esc(lastComment.text):'<span class="hint">No previous comments</span>'}</div>
+      <label class="lbl" style="margin-top:16px">${verbNoun} Reason <span class="req">*</span></label>
+      <select class="select" id="rcReason"><option value="">Select Reason</option>${reasons.map(r=>`<option>${esc(r)}</option>`).join('')}</select>
+      <label class="lbl" style="margin-top:16px">${verbNoun} Resolution Category <span class="req">*</span></label>
+      <select class="select" id="rcCategory"><option value="">Select Resolution Category</option>${RESOLUTION_CATEGORIES.map(c=>`<option>${esc(c)}</option>`).join('')}</select>
+      <label class="lbl" style="margin-top:16px">Please specify the reason <span class="req">*</span> (Min 20 characters)</label>
+      <textarea class="field" id="rcNote" rows="4" placeholder="Enter the reason for ${isResolve?'resolving':'closing'} this ticket..."></textarea>
+      <div class="hint" id="rcCount">0 / 20 characters minimum</div>
+    </div>
+    <div class="modal-foot"><div class="spacer"></div>
+      <button class="btn btn-light" data-close>Cancel</button>
+      <button class="btn btn-primary" id="rcConfirm" disabled>${title}</button></div>`, 640);
+  $$('[data-close]').forEach(b=>b.onclick=()=>{revert();closeModal();});
+  $('[data-overlay]')&&($('[data-overlay]').onclick=()=>{revert();closeModal();});
+  const sync=()=>{ $('#rcConfirm').disabled=!(reason && category && note.trim().length>=20); };
+  $('#rcReason').onchange=e=>{reason=e.target.value;sync();};
+  $('#rcCategory').onchange=e=>{category=e.target.value;sync();};
+  $('#rcNote').oninput=e=>{note=e.target.value;$('#rcCount').textContent=`${note.trim().length} / 20 characters minimum`;sync();};
+  $('#rcConfirm').onclick=()=>{
+    const nw = isResolve?'RESOLVED':'CLOSED';
+    t.resolution={type:nw, reason, category, note, by:CURRENT_USER.name, at:new Date()};
+    transitionStatus(t, oldStatus, nw);
+    pushHistory(t, isResolve?'resolution':'closure', titleCase(oldStatus), `${reason} · ${category}`);
+    closeModal(); paintListKeepScroll(); toast(title.replace('Ticket','')+'d', `${reason} · ${category}`);
+  };
+}
+
+/* View Survey drawer — right-side panel showing the linked survey Q&A (survey/auto tickets) */
+function openSurveyDrawer(t){
+  const s=t.survey; const c=t.customer_info||{};
+  const qHTML=(q)=>{
+    if(q.type==='nps'){ const n=q.scale||10; let btns='';
+      for(let i=1;i<=n;i++){ btns+=`<span class="nps-btn ${i<=q.answer?'on':''}">${i}</span>`; }
+      return `<div class="sv-q">${esc(q.q)}</div><div class="nps-row">${btns}</div>`; }
+    if(q.type==='single'){ return `<div class="sv-q">${esc(q.q)}</div>`+q.options.map(o=>`<div class="sv-opt ${o===q.answer?'on':''}"><span class="radio"></span>${esc(o)}</div>`).join(''); }
+    return `<div class="sv-q">${esc(q.q)}</div><div class="sv-ans">${esc(q.answer)}</div>`;
+  };
+  const drawer=document.createElement('div');
+  drawer.className='drawer-root show';
+  drawer.innerHTML=`<div class="drawer-overlay"></div><div class="drawer">
+    <button class="drawer-close">×</button>
+    <div class="drawer-head">
+      <div><b>Customer Name:</b> ${esc(maskName(t,c.name)||'—')}</div>
+      <div><b>Customer Email:</b> ${esc(maskEmail(t,c.email)||'Unavailable')}</div>
+      <div><b>Customer Phone No:</b> ${esc(maskPhone(t,c.phone)||'—')}</div>
+      <div><b>Submission Time:</b> ${s?fmtDT(s.submittedAt):fmtDT(t.created_at)}</div>
+    </div>
+    <div class="drawer-body">${s?s.questions.map(q=>`<div class="sv-card">${qHTML(q)}</div>`).join(''):'<div class="page-sub">No survey data.</div>'}</div>
+  </div>`;
+  document.body.appendChild(drawer);
+  const close=()=>drawer.remove();
+  drawer.querySelector('.drawer-close').onclick=close;
+  drawer.querySelector('.drawer-overlay').onclick=close;
+}
 
 function openReplyModal(t){
   let channel='EMAIL';

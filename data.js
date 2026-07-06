@@ -24,6 +24,11 @@ const ENUM = {
   sentiments: ['Detractor','Passive','Promoter'],
 };
 
+// Resolve / Close modal option lists (shown when status → RESOLVED / CLOSED)
+const RESOLVING_REASONS = ['Action Taken','Info Provided','Policy Explained','Customer Unreachable','Invalid/Duplicate','Other'];
+const CLOSING_REASONS   = ['Resolved & Confirmed','Customer Satisfied','No Response from Customer','Duplicate Ticket','Escalated Externally','Other'];
+const RESOLUTION_CATEGORIES = ['Resolved','Compensation Offered','Exchange','Refund','Training Required','Store Action Required','Escalated'];
+
 // Category → Sub-category tree (single-select category drives sub-category list)
 const CATEGORY_TREE = {
   'Store Staff': ['Product Knowledge','Proactive Assistance','In-Store Engagement','Staff Attitude','Staff Availability','Grooming & Appearance','Staff Follow-up','Language Barrier'],
@@ -130,7 +135,8 @@ function mkTicket(o){
     source_identifier:o.sourceId||null, bill_id:o.billId||null,
     tags:o.tags||[], categories:o.categories||[], sub_category:o.subCategory||null,
     sentiment:o.sentiment||null, product_skus:o.skus||[],
-    amount:o.amount||null, receipt_date:o.receiptDate||null,
+    amount:o.amount||null, receipt_date:o.receiptDate||null, line_items:o.lineItems||null,
+    survey:o.survey||null, resolution:o.resolution||null,
     score:o.score, score_cats:o.scoreCats||[],
     due_date:due, is_overdue:overdue, sla_status:overdue?'BREACHED':(due-new Date()<3600*1000?'AT_RISK':'ON_TRACK'),
     escalation_info:o.escalation||null,
@@ -151,6 +157,8 @@ const TICKETS = [
     description:'Customer reported a sizing discrepancy on a shirt purchased in-store.',
     categories:['Product Quality'], sentiment:'Passive', tags:['cod'], ageH:2,
     billId:'T3HH13R3M1141CMIX4C1PII', amount:'AED 538.00', receiptDate:hoursAgo(3),
+    lineItems:[{product:'Slim Fit Shirt', units:1, unitPrice:'AED 299.00', total:'AED 299.00'},
+               {product:'Cotton Chinos', units:1, unitPrice:'AED 239.00', total:'AED 239.00'}],
     comments:[
       {author:'Rahul Ukey', email:'rahul.ukey@karnival.com', text:'@siva Email was sent to store for further investigation.', internal:true, at:hoursAgo(1.5), mentions:['siva']},
     ],
@@ -170,6 +178,11 @@ const TICKETS = [
     score:'10 / 10', sentiment:'Promoter', scoreCats:['CheckOut Experience','Clarity of Information','Double checking again for correct'],
     sourceId:'survey_889', tags:['promoter'], categories:['Store Experience'], ageH:600,
     billId:'AGSURV889COD', amount:'AED 312.00', receiptDate:hoursAgo(602),
+    lineItems:[{product:'GO WALK FLEX', units:1, unitPrice:'AED 312.00', total:'AED 312.00'}],
+    survey:{submittedAt:hoursAgo(600), questions:[
+      {q:'Based on your shopping experience, how likely are you to recommend us to your friends & relatives?', type:'nps', scale:10, answer:10},
+      {q:'What did you like the most about your visit?', type:'single', options:['Store Staff','Product','Store Experience','Club Apparel','Checkout Experience'], answer:'Checkout Experience'},
+      {q:'Please share any additional feedback', type:'text', answer:'Very smooth checkout and helpful staff. Clarity of information was excellent.'}]},
     escalation:{level:2, escalated_at:hoursAgo(580), escalated_to:['Tier-2 Support'], reason:'L2 SLA breached'},
     comments:[], comms:[],
     history:[{field:'status', old:'OPEN', neu:'AUTO_ESCALATED', by:'TicketEscalationJob', at:hoursAgo(580)}]}),
