@@ -20,6 +20,7 @@
   /* status */
   --st-open:#2563eb;     --st-open-bg:#e6efff;
   --st-prog:#b45309;     --st-prog-bg:#fdebcd;
+  --st-verify:#0e7490;   --st-verify-bg:#cff4fb;
   --st-res:#15803d;      --st-res-bg:#dcf5e4;
   --st-closed:#5b6472;   --st-closed-bg:#eceef2;
   --st-esc:#dc2626;      --st-esc-bg:#fde4e4;
@@ -154,6 +155,7 @@ label.lbl .req{color:#ef4444}
 .badge{display:inline-flex;align-items:center;gap:5px;padding:4px 11px;border-radius:20px;font-size:12px;font-weight:600;white-space:nowrap}
 .b-open{background:var(--st-open-bg);color:var(--st-open)}
 .b-inprogress{background:var(--st-prog-bg);color:var(--st-prog)}
+.b-verify{background:var(--st-verify-bg);color:var(--st-verify)}
 .b-resolved{background:var(--st-res-bg);color:var(--st-res)}
 .b-closed{background:var(--st-closed-bg);color:var(--st-closed)}
 .b-escalated,.b-auto_escalated{background:var(--st-esc-bg);color:var(--st-esc)}
@@ -166,12 +168,13 @@ label.lbl .req{color:#ef4444}
 .sla-ok{background:#dcf5e4;color:#15803d}
 
 /* ===================== KPI cards ===================== */
-.kpi-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:14px;margin-bottom:20px}
+.kpi-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:14px;margin-bottom:20px}
 .kpi{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:18px 18px}
 .kpi .k-label{color:var(--muted);font-size:12.5px;font-weight:600}
 .kpi .k-val{font-size:30px;font-weight:800;margin-top:8px;letter-spacing:-1px}
 .kpi.k-open .k-val{color:var(--st-open)}
 .kpi.k-prog .k-val{color:var(--st-prog)}
+.kpi.k-verify .k-val{color:var(--st-verify)}
 .kpi.k-res .k-val{color:var(--st-res)}
 .kpi.k-closed .k-val{color:var(--st-closed)}
 .kpi.k-reopen .k-val{color:var(--st-reopen)}

@@ -3,7 +3,7 @@
    Mirrors the support_ticket model from the reference doc.
    ============================================================ */
 const ENUM = {
-  status: ['OPEN','INPROGRESS','RESOLVED','CLOSED','ESCALATED','AUTO_ESCALATED','REOPEN'],
+  status: ['OPEN','INPROGRESS','VERIFY','RESOLVED','CLOSED','ESCALATED','AUTO_ESCALATED','REOPEN'],
   priority: ['HIGH','MEDIUM','LOW'],
   sourceType: ['FEEDBACK','SURVEY','NPS','CSAT','MANUAL','EMAIL','CHAT','WHATSAPP','PHONE'],
   // manual source channels (seen in recording dropdown)
@@ -215,13 +215,13 @@ const TICKETS = [
     score:'8 / 10', sentiment:'Passive', scoreCats:['Service','Wait time'], categories:['Customer Service'], ageH:740,
     billId:'VHSURV016', amount:'₹1,899.00', receiptDate:hoursAgo(742)}),
   mkTicket({num:'TKT-101', brand:'Allen Solly', project:'pe_test_2', projectName:'Peter England Test Project 2',
-    title:'Refund not processed for online order', status:'INPROGRESS', priority:'HIGH', source:'EMAIL',
+    title:'Refund not processed for online order', status:'VERIFY', priority:'HIGH', source:'EMAIL',
     city:'Mumbai', state:'MH', zone:'West',
     assigned:'priya.menon@karnival.com', assignedName:'Priya Menon', createdBy:'priya.menon@karnival.com',
     customer:{name:'Anita Desai', email:'anita.d@example.com', phone:'9876500011', id:'CUST-55012'},
     description:'Refund of ₹2,499 pending for 6 days against returned order.',
     categories:['Returns & Refunds','Billing'], tags:['refund','urgent'], ageH:30,
-    comments:[{author:'Priya Menon', email:'priya.menon@karnival.com', text:'Raised reversal request with payments team.', internal:true, at:hoursAgo(20), tags:['Action taken']}]}),
+    comments:[{author:'Priya Menon', email:'priya.menon@karnival.com', text:'Ops team processed the reversal — awaiting verification before resolving.', internal:true, at:hoursAgo(20), tags:['Action taken']}]}),
   mkTicket({num:'TKT-102', brand:'Van Heusen', project:'vh_live', projectName:'Live Dashboard Testing',
     title:'Website checkout throwing 500 error', status:'RESOLVED', priority:'HIGH', source:'CHAT',
     city:'Bengaluru', state:'KA', zone:'South',
@@ -246,7 +246,7 @@ const TICKETS = [
 ];
 
 // status counts (mirrors All Tickets KPIs in the recording)
-const KPI = {OPEN:294, INPROGRESS:36, RESOLVED:11, CLOSED:41, REOPEN:2, TOTAL:692};
+const KPI = {OPEN:294, INPROGRESS:36, VERIFY:8, RESOLVED:11, CLOSED:41, REOPEN:2, TOTAL:692};
 
 const COUNTRY_STATS = [
   {country:'India', count:438}, {country:'UAE', count:171}, {country:'UK', count:52}, {country:'USA', count:31},

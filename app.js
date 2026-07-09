@@ -152,6 +152,7 @@ function renderTicketOverview(){
   const statusData=[
     {label:'Open',color:'#2563eb',value:KPI.OPEN},
     {label:'In Progress',color:'#fb923c',value:KPI.INPROGRESS},
+    {label:'Verify',color:'#0e7490',value:KPI.VERIFY},
     {label:'Resolved',color:'#22c55e',value:KPI.RESOLVED},
     {label:'Closed',color:'#94a3b8',value:KPI.CLOSED},
     {label:'Reopen',color:'#7c3aed',value:KPI.REOPEN},
@@ -178,6 +179,7 @@ function kpiGrid(){
   return `<div class="kpi-grid">
     <div class="kpi k-open"><div class="k-label">Open Tickets</div><div class="k-val">${KPI.OPEN}</div></div>
     <div class="kpi k-prog"><div class="k-label">In progress Tickets</div><div class="k-val">${KPI.INPROGRESS}</div></div>
+    <div class="kpi k-verify"><div class="k-label">Verify Tickets</div><div class="k-val">${KPI.VERIFY}</div></div>
     <div class="kpi k-res"><div class="k-label">Resolved Tickets</div><div class="k-val">${KPI.RESOLVED}</div></div>
     <div class="kpi k-closed"><div class="k-label">Closed Tickets</div><div class="k-val">${KPI.CLOSED}</div></div>
     <div class="kpi k-reopen"><div class="k-label">Reopen Tickets</div><div class="k-val">${KPI.REOPEN}</div></div>
@@ -846,7 +848,7 @@ function paintSupportList(){
     <div class="slc-agent">🎧 ${esc(t.assigned_name||agentName(t.assigned_to)||'Unassigned')}</div></div>`).join('')||'<div class="page-sub">No tickets</div>';
   $$('#sCards .sl-card').forEach(c=>c.onclick=()=>{supportActive=c.dataset.num;renderSupport();});
 }
-function stColor(s){return {OPEN:'#2563eb',INPROGRESS:'#b45309',RESOLVED:'#15803d',CLOSED:'#5b6472',AUTO_ESCALATED:'#2563eb',ESCALATED:'#dc2626',REOPEN:'#7c3aed'}[s]||'#2563eb';}
+function stColor(s){return {OPEN:'#2563eb',INPROGRESS:'#b45309',VERIFY:'#0e7490',RESOLVED:'#15803d',CLOSED:'#5b6472',AUTO_ESCALATED:'#2563eb',ESCALATED:'#dc2626',REOPEN:'#7c3aed'}[s]||'#2563eb';}
 function chIcon(ch){return {EMAIL:'✉️',Email:'✉️',SMS:'📱',WHATSAPP:'💬',WhatsApp:'💬',MANUAL:'📝'}[ch]||'✉️';}
 function paintConv(){
   const t=findTicket(supportActive); const pane=$('#convPane'); if(!t){pane.innerHTML='';return;}
