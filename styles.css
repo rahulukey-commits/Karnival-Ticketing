@@ -192,6 +192,17 @@ label.lbl .req{color:#ef4444}
 .tcard{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px;cursor:pointer;transition:.15s}
 .tcard:hover{border-color:#d7bcd8;box-shadow:var(--shadow)}
 .tcard-top{display:flex;align-items:flex-start;gap:14px}
+.tcheck{display:flex;align-items:center;padding-top:2px}
+.tcheck input{width:18px;height:18px;accent-color:var(--primary);cursor:pointer}
+.tcard-sel{border-color:var(--primary);box-shadow:0 0 0 1px var(--primary) inset,var(--shadow)}
+/* floating bulk-action bar */
+.bulkbar{position:sticky;bottom:0;z-index:6;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;
+  margin-top:16px;background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 -6px 24px rgba(20,15,40,.12);padding:12px 16px}
+.bulkbar[hidden]{display:none}
+.bb-left{display:flex;align-items:center;gap:12px}
+.bb-count{font-weight:700;color:var(--primary)}
+.bb-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.bb-sel{width:auto;min-width:130px;height:38px;background:#fff}
 .tcard-ico{width:38px;height:38px;border-radius:10px;background:var(--primary-050);display:grid;place-items:center;flex-shrink:0;font-size:18px}
 .tcard-main{flex:1;min-width:0}
 .tcard-meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:13px;color:var(--ink-2)}

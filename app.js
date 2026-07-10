@@ -34,7 +34,7 @@ function toast(title,msg,kind='ok'){
 const state = {
   page:1, pageSize:10,
   filters:{search:'',assignee:'',priority:'',status:'',tag:'',brand:'',project:'',from:'',to:''},
-  moreOptions:false, expanded:null,
+  moreOptions:false, expanded:null, selected:new Set(),
 };
 
 /* ============================================================ ROUTER + SHEET
@@ -84,7 +84,7 @@ function router(){
   if(route==='home'){ closeSheet(); return; }
   openSheet();
   // 'view/NUM' shares the All Tickets sheet with that ticket expanded inline (accordion)
-  if(route==='tickets'){ state.expanded=null; renderTickets(); mount().scrollTop=0; return; }
+  if(route==='tickets'){ state.expanded=null; state.selected.clear(); renderTickets(); mount().scrollTop=0; return; }
   if(route==='view'){ state.expanded=param; state.expandLoading=true; renderTickets();
     setTimeout(()=>{const el=document.getElementById('expandedTop'); if(el) el.scrollIntoView({block:'start'});},30);
     setTimeout(()=>{ if(state.expanded===param){ state.expandLoading=false; paintList(); } },420);  // skeleton → content
@@ -224,10 +224,11 @@ function renderTickets(){
         <div><label class="lbl">To</label><input type="date" class="field" id="fTo" value="${f.to}" style="width:170px"></div>
         <button class="btn btn-light btn-sm" id="clearF" style="align-self:flex-end">Clear filters</button>
       </div>`:''}
-    <div id="ticketList"></div>`;
+    <div id="ticketList"></div>
+    <div id="bulkBar" class="bulkbar" hidden></div>`;
 
   $('#createBtn').onclick=openCreateModal;
-  const bind=(id,key,re=false)=>{const el=$('#'+id); if(!el)return; el.oninput=el.onchange=()=>{state.filters[key]=el.value;state.page=1;paintList();if(re)renderTickets();};};
+  const bind=(id,key,re=false)=>{const el=$('#'+id); if(!el)return; el.oninput=el.onchange=()=>{state.filters[key]=el.value;state.page=1;state.selected.clear();paintList();if(re)renderTickets();};};
   bind('fSearch','search'); bind('fAssignee','assignee'); bind('fPriority','priority');
   bind('fStatus','status'); bind('fTag','tag'); bind('fBrand','brand'); bind('fProject','project');
   bind('fFrom','from'); bind('fTo','to');
@@ -249,9 +250,15 @@ function paintList(){
       <button class="pg" id="prevPg" ${state.page<=1?'disabled':''}>Previous</button>
       <button class="pg" id="nextPg" ${start+state.pageSize>=all.length?'disabled':''}>Next</button></div>`;
   $$('.tcard',host).forEach(c=>c.onclick=()=>go('view/'+c.dataset.num));
+  // selection checkboxes (don't trigger card-expand)
+  $$('.tcheck',host).forEach(l=>{ l.onclick=e=>e.stopPropagation();
+    const cb=l.querySelector('input'); cb.onchange=e=>{e.stopPropagation();
+      if(cb.checked) state.selected.add(cb.dataset.sel); else state.selected.delete(cb.dataset.sel);
+      l.closest('.tcard').classList.toggle('tcard-sel',cb.checked); paintBulkBar(); };});
   if(expT && !state.expandLoading){ wireDetail(expT); paintTab(expT); }
   if($('#prevPg')) $('#prevPg').onclick=()=>{state.page--;paintList();};
   if($('#nextPg')) $('#nextPg').onclick=()=>{state.page++;paintList();};
+  paintBulkBar();
 }
 function paintListKeepScroll(){ const sb=$('#sheetBody'); const sc=sb?sb.scrollTop:0; paintList(); if(sb) sb.scrollTop=sc; }
 // loading skeleton shown briefly while a ticket expands (matches the app's expand transition)
@@ -274,8 +281,10 @@ function ticketCard(t){
   const person = (t.customer_info&&t.customer_info.name) || t.created_by || 'Unknown';
   const srcLabel = titleCase(t.source_type||'MANUAL');
   const prefix = isSurvey ? `${srcLabel} (${esc(t.project_name)}): ` : `${srcLabel}: `;
-  return `<div class="tcard" data-num="${t.ticket_number}">
+  const sel=state.selected.has(t.ticket_number);
+  return `<div class="tcard ${sel?'tcard-sel':''}" data-num="${t.ticket_number}">
     <div class="tcard-top">
+      <label class="tcheck" title="Select ticket"><input type="checkbox" data-sel="${t.ticket_number}" ${sel?'checked':''}></label>
       <div class="tcard-ico">💬</div>
       <div class="tcard-main">
         <div class="tcard-meta">
@@ -662,11 +671,93 @@ function wireDetail(t){
   if($('#viewSurvey')) $('#viewSurvey').onclick=(e)=>{e.stopPropagation();openSurveyDrawer(t);};
   if($('#billToggle')) $('#billToggle').onclick=(e)=>{e.stopPropagation();const li=$('#billItems');if(li){const open=li.style.display!=='none';li.style.display=open?'none':'block';$('#billChevron').textContent=open?'⌄':'⌃';}};
 }
-function transitionStatus(t,old,nw){
+function applyStatus(t,old,nw){
   t.ticket_status=nw; pushHistory(t,'status',titleCase(old),titleCase(nw));
-  LOGS.unshift({at:new Date(),ticket:t.ticket_number,event:'STATUS_CHANGE',actor:'Rahul Ukey',detail:`${titleCase(old)} → ${titleCase(nw)}`});
+  LOGS.unshift({at:new Date(),ticket:t.ticket_number,event:'STATUS_CHANGE',actor:CURRENT_USER.name,detail:`${titleCase(old)} → ${titleCase(nw)}`});
   if(nw==='RESOLVED'){t.resolved_at=new Date();}
-  toast('Status updated',titleCase(nw));
+}
+function transitionStatus(t,old,nw){ applyStatus(t,old,nw); toast('Status updated',titleCase(nw)); }
+
+/* ============================================================ BULK ACTIONS */
+function paintBulkBar(){
+  const bar=$('#bulkBar'); if(!bar) return;
+  const n=state.selected.size;
+  if(n===0){ bar.hidden=true; bar.innerHTML=''; return; }
+  bar.hidden=false;
+  bar.innerHTML=`
+    <div class="bb-left">
+      <span class="bb-count">${n} selected</span>
+      <button class="btn-ghost btn-sm" id="bbSelectAll">Select all ${filteredTickets().length}</button>
+      <button class="btn-ghost btn-sm" id="bbClear">Clear</button>
+    </div>
+    <div class="bb-actions">
+      <button class="btn btn-light btn-sm" id="bbAssignMe">👤 Assign to me</button>
+      <select class="select bb-sel" id="bbAssign"><option value="">Assign to…</option>
+        <optgroup label="Agents">${AGENTS.map(a=>`<option value="a:${a.email}">${a.name}</option>`).join('')}</optgroup>
+        <optgroup label="Groups">${GROUPS.map(g=>`<option value="g:${esc(g)}">${esc(g)}</option>`).join('')}</optgroup></select>
+      <select class="select bb-sel" id="bbStatus"><option value="">Status…</option>${ENUM.status.map(s=>`<option>${titleCase(s)}</option>`).join('')}</select>
+      <select class="select bb-sel" id="bbPriority"><option value="">Priority…</option>${ENUM.priority.map(p=>`<option>${titleCase(p)}</option>`).join('')}</select>
+      <select class="select bb-sel" id="bbTag"><option value="">Add tag…</option>${TAGS.map(t=>`<option>${esc(t)}</option>`).join('')}</select>
+    </div>`;
+  const sel=()=>[...state.selected].map(findTicket).filter(Boolean);
+  $('#bbClear').onclick=()=>{state.selected.clear();paintListKeepScroll();};
+  $('#bbSelectAll').onclick=()=>{filteredTickets().forEach(t=>state.selected.add(t.ticket_number));paintListKeepScroll();};
+  $('#bbAssignMe').onclick=()=>bulkAssign(sel(),CURRENT_USER.email,CURRENT_USER.name,false);
+  $('#bbAssign').onchange=e=>{const v=e.target.value;if(!v)return;const isGroup=v.startsWith('g:');const val=v.slice(2);
+    bulkAssign(sel(), isGroup?null:val, isGroup?val:agentName(val), isGroup);};
+  $('#bbStatus').onchange=e=>{if(e.target.value) bulkStatus(sel(), e.target.value.toUpperCase().replace(/ /g,'_'));};
+  $('#bbPriority').onchange=e=>{if(e.target.value) bulkPriority(sel(), e.target.value.toUpperCase());};
+  $('#bbTag').onchange=e=>{if(e.target.value) bulkTag(sel(), e.target.value);};
+}
+function bulkAssign(list, email, name, isGroup){
+  if(!list.length) return;
+  list.forEach(t=>{ if(isGroup){ t.group_assigned_to=name; pushHistory(t,'group_assigned_to','—',name); }
+    else { t.assigned_to=email; t.assigned_name=name; pushHistory(t,'assigned_to','—',name); }
+    LOGS.unshift({at:new Date(),ticket:t.ticket_number,event:'ASSIGNED',actor:CURRENT_USER.name,detail:`${isGroup?'Group ':''}Assigned to ${name} (bulk)`}); });
+  toast('Bulk assigned',`${list.length} ticket(s) → ${name}`); state.selected.clear(); paintListKeepScroll();
+}
+function bulkPriority(list,p){ list.forEach(t=>{const old=t.ticket_priority;t.ticket_priority=p;pushHistory(t,'priority',titleCase(old),titleCase(p));});
+  toast('Priority updated',`${list.length} ticket(s) → ${titleCase(p)}`); state.selected.clear(); paintListKeepScroll(); }
+function bulkTag(list,tag){ list.forEach(t=>{t.tags=t.tags||[];if(!t.tags.includes(tag))t.tags.push(tag);pushHistory(t,'tag','—',tag);});
+  toast('Tag added',`"${tag}" → ${list.length} ticket(s)`); state.selected.clear(); paintListKeepScroll(); }
+function bulkStatus(list,nw){
+  if(!list.length) return;
+  if(nw==='RESOLVED'||nw==='CLOSED'){ openBulkResolveClose(list, nw==='RESOLVED'?'resolve':'close'); return; }
+  list.forEach(t=>applyStatus(t,t.ticket_status,nw));
+  toast('Status updated',`${list.length} ticket(s) → ${titleCase(nw)}`); state.selected.clear(); paintListKeepScroll();
+}
+function openBulkResolveClose(list, mode){
+  const isResolve=mode==='resolve';
+  const title=isResolve?`Resolve ${list.length} Tickets`:`Close ${list.length} Tickets`;
+  const reasons=isResolve?RESOLVING_REASONS:CLOSING_REASONS; const verbNoun=isResolve?'Resolving':'Closing';
+  let reason='',category='',note='';
+  openModal(`<div class="modal-head"><div class="mh-ico">${isResolve?'✓':'🔒'}</div><h2>${title}</h2><button class="modal-close" data-close>×</button></div>
+    <div class="modal-body">
+      <div class="ok-text" style="margin-bottom:6px">Applying to ${list.length} selected ticket(s): ${list.map(t=>t.ticket_number).join(', ')}</div>
+      <label class="lbl" style="margin-top:10px">${verbNoun} Reason <span class="req">*</span></label>
+      <select class="select" id="rcReason"><option value="">Select Reason</option>${reasons.map(r=>`<option>${esc(r)}</option>`).join('')}</select>
+      <label class="lbl" style="margin-top:16px">${verbNoun} Resolution Category <span class="req">*</span></label>
+      <select class="select" id="rcCategory"><option value="">Select Resolution Category</option>${RESOLUTION_CATEGORIES.map(c=>`<option>${esc(c)}</option>`).join('')}</select>
+      <label class="lbl" style="margin-top:16px">Please specify the reason <span class="req">*</span> (Min 20 characters)</label>
+      <textarea class="field" id="rcNote" rows="4" placeholder="Enter the reason for ${isResolve?'resolving':'closing'} these tickets..."></textarea>
+      <div class="hint" id="rcCount">0 / 20 characters minimum</div>
+    </div>
+    <div class="modal-foot"><div class="spacer"></div>
+      <button class="btn btn-light" data-close>Cancel</button>
+      <button class="btn btn-primary" id="rcConfirm" disabled>${isResolve?'Resolve':'Close'} ${list.length} Tickets</button></div>`, 640);
+  $$('[data-close]').forEach(b=>b.onclick=closeModal);
+  const sync=()=>{ $('#rcConfirm').disabled=!(reason&&category&&note.trim().length>=20); };
+  $('#rcReason').onchange=e=>{reason=e.target.value;sync();};
+  $('#rcCategory').onchange=e=>{category=e.target.value;sync();};
+  $('#rcNote').oninput=e=>{note=e.target.value;$('#rcCount').textContent=`${note.trim().length} / 20 characters minimum`;sync();};
+  $('#rcConfirm').onclick=()=>{
+    const nw=isResolve?'RESOLVED':'CLOSED';
+    list.forEach(t=>{ t.resolution={type:nw,reason,category,note,by:CURRENT_USER.name,at:new Date()};
+      const old=t.ticket_status; applyStatus(t,old,nw);
+      t.history_audit.unshift({field:isResolve?'resolution':'closure',old:titleCase(old),neu:titleCase(nw),by:CURRENT_USER.email,at:new Date(),reason,category,note}); });
+    closeModal(); state.selected.clear(); paintListKeepScroll();
+    toast(`${list.length} ticket(s) ${isResolve?'resolved':'closed'}`,`${reason} · ${category}`);
+  };
 }
 function pushHistory(t,field,old,neu){t.history_audit=t.history_audit||[];t.history_audit.unshift({field,old,neu,by:'rahul.ukey@karnival.com',at:new Date()});t.updated_at=new Date();}
 function paintTab(t){
