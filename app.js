@@ -661,22 +661,31 @@ function submitCreate(){
   const store=STORES.find(s=>s.id===draft.store);
   const prefix=(p.name.match(/\b\w/g)||['T']).slice(0,4).join('').toUpperCase();
   const cat=resolvedCategory(), sub=resolvedSubCategory();
-  const t=mkTicket({num:nextTicketNo(prefix), brand:p.brand, project:p.project_id, projectName:p.name,
-    title:draft.title.trim(), status:'OPEN', type:draft.type, priority:draft.priority, source:'MANUAL', manualSource:draft.source,
-    sentiment:draft.sentiment||null, subCategory:sub||null,
-    store:draft.store||null, storeName:store?store.name:null, location:store?store.address:null,
-    city:store?store.city:null, state:store?store.state:null, zone:store?store.zone:null, country:store?store.country:'India',
-    assigned:draft.assignee, assignedName:agentName(draft.assignee), createdBy:'Rahul Ukey',
-    customer:{name:draft.custName||'—', email:draft.custEmail, phone:draft.custPhone, id:draft.custId},
-    description:draft.desc, categories:cat?[cat]:[], tags:draft.tags.slice(),
-    skus:draft.sku?[draft.sku]:[], billId:draft.invoices[0]||null,
-    attachments:draft.files.map((f,i)=>({attachment_id:'att_'+Date.now()+i, filename:f.name, size_bytes:f.size, mime_type:f.type||'application/octet-stream', uploaded_by:'rahul.ukey@karnival.com', uploaded_at:new Date()})),
-    history:[{field:'status', old:'—', neu:'OPEN', by:'rahul.ukey@karnival.com', at:new Date()},
-             {field:'assigned_to', old:'—', neu:agentName(draft.assignee), by:'rahul.ukey@karnival.com', at:new Date()}],
-  });
-  TICKETS.unshift(t); KPI.OPEN++; KPI.TOTAL++;
-  LOGS.unshift({at:new Date(), ticket:t.ticket_number, event:'CREATED', actor:'Rahul Ukey', detail:`Ticket created from ${titleCase(draft.source)}`});
-  closeModal(); toast('Ticket created', `${t.ticket_number} · ${t.title}`); go('view/'+t.ticket_number);
+
+  // Show loader
+  closeModal();
+  mount().innerHTML=`<div style="display:flex;align-items:center;justify-content:center;height:100%;"><div style="text-align:center"><div style="font-size:48px;margin-bottom:20px">⏳</div><div style="font-size:18px;color:#666;margin-bottom:10px">Creating ticket...</div><div style="font-size:14px;color:#999">Please wait while we process your request</div></div></div>`;
+
+  // Simulate processing delay for UX
+  setTimeout(()=>{
+    const t=mkTicket({num:nextTicketNo(prefix), brand:p.brand, project:p.project_id, projectName:p.name,
+      title:draft.title.trim(), status:'OPEN', type:draft.type, priority:draft.priority, source:'MANUAL', manualSource:draft.source,
+      sentiment:draft.sentiment||null, subCategory:sub||null,
+      store:draft.store||null, storeName:store?store.name:null, location:store?store.address:null,
+      city:store?store.city:null, state:store?store.state:null, zone:store?store.zone:null, country:store?store.country:'India',
+      assigned:draft.assignee, assignedName:agentName(draft.assignee), createdBy:'Rahul Ukey',
+      customer:{name:draft.custName||'—', email:draft.custEmail, phone:draft.custPhone, id:draft.custId},
+      description:draft.desc, categories:cat?[cat]:[], tags:draft.tags.slice(),
+      skus:draft.sku?[draft.sku]:[], billId:draft.invoices[0]||null,
+      attachments:draft.files.map((f,i)=>({attachment_id:'att_'+Date.now()+i, filename:f.name, size_bytes:f.size, mime_type:f.type||'application/octet-stream', uploaded_by:'rahul.ukey@karnival.com', uploaded_at:new Date()})),
+      history:[{field:'status', old:'—', neu:'OPEN', by:'rahul.ukey@karnival.com', at:new Date()},
+               {field:'assigned_to', old:'—', neu:agentName(draft.assignee), by:'rahul.ukey@karnival.com', at:new Date()}],
+    });
+    TICKETS.unshift(t); KPI.OPEN++; KPI.TOTAL++;
+    LOGS.unshift({at:new Date(), ticket:t.ticket_number, event:'CREATED', actor:'Rahul Ukey', detail:`Ticket created from ${titleCase(draft.source)}`});
+    toast('✅ Ticket Created', `${t.ticket_number} · ${t.title}`);
+    go('view/'+t.ticket_number);
+  }, 800);
 }
 
 /* ============================================================ TICKET DETAIL (inline accordion) */
@@ -746,7 +755,7 @@ function ticketDetailHTML(t){
       <div class="detail-controls">
         <select class="select" id="dvPriority">${ENUM.priority.map(p=>`<option ${t.ticket_priority===p?'selected':''}>${titleCase(p)}</option>`).join('')}</select>
         <select class="select" id="dvStatus">${ENUM.status.map(s=>`<option value="${s}" ${t.ticket_status===s?'selected':''}>${statusLabel(s)}</option>`).join('')}</select>
-        <select class="select" id="dvGroupAssign"><option value="">Assign group</option>${GROUPS.concat(STORES.map(s=>s.name)).map(g=>`<option ${t.group_assigned_to===g?'selected':''}>${esc(g)}</option>`).join('')}</select>
+        <select class="select" id="dvStoreAssign"><option value="">Select Store</option>${STORES.map(s=>`<option value="${s.id}" ${t.store===s.id?'selected':''}>${esc(s.name)} · ${esc(s.city)}</option>`).join('')}</select>
         <input type="date" class="select" id="dvDue" value="${t.due_date?t.due_date.toISOString().slice(0,10):''}">
       </div>
       <div class="row" style="justify-content:space-between;margin-top:12px">${slaPill(t)}<span class="page-sub">Created: ${fmtDT(t.created_at)}</span></div>
@@ -796,16 +805,16 @@ const maskEmail=(t,e)=>t.hide_personal_data&&e?e.slice(0,3)+'***@***.com':e;
 const maskPhone=(t,p)=>t.hide_personal_data&&p?'+'+p.slice(0,2)+'****'+p.slice(-4):p;
 
 function wireDetail(t){
-  $('#dvPriority').onchange=e=>{const old=t.ticket_priority;t.ticket_priority=e.target.value.toUpperCase();pushHistory(t,'priority',titleCase(old),titleCase(t.ticket_priority));toast('Priority updated',titleCase(t.ticket_priority));};
+  $('#dvPriority').onchange=e=>{const old=t.ticket_priority;t.ticket_priority=e.target.value.toUpperCase();pushHistory(t,'priority',titleCase(old),titleCase(t.ticket_priority));toast('🎯 Priority Updated',titleCase(t.ticket_priority));};
   $('#dvStatus').onchange=e=>{const old=t.ticket_status;const nw=e.target.value.toUpperCase().replace(/ /g,'_');
     if(nw==='RESOLVED'){ openResolveCloseModal(t,'resolve',old,e.target); return; }
     if(nw==='CLOSED'){ openResolveCloseModal(t,'close',old,e.target); return; }
     transitionStatus(t,old,nw);Array.from(e.target.options).forEach(opt=>{opt.selected=opt.value===nw;});paintListKeepScroll();};
-  $('#dvAssignee').onchange=e=>{t.assigned_to=e.target.value;t.assigned_name=agentName(e.target.value);pushHistory(t,'assigned_to','—',t.assigned_name);toast('Reassigned',t.assigned_name);LOGS.unshift({at:new Date(),ticket:t.ticket_number,event:'ASSIGNED',actor:'Rahul Ukey',detail:'Assigned to '+t.assigned_name});};
-  if($('#dvAssignMe')) $('#dvAssignMe').onclick=(e)=>{e.stopPropagation();const old=t.assigned_name||'—';t.assigned_to=CURRENT_USER.email;t.assigned_name=CURRENT_USER.name;pushHistory(t,'assigned_to',old,CURRENT_USER.name);LOGS.unshift({at:new Date(),ticket:t.ticket_number,event:'ASSIGNED',actor:CURRENT_USER.name,detail:'Self-assigned to '+CURRENT_USER.name});paintListKeepScroll();toast('Assigned to you',CURRENT_USER.name);};
-  if($('#dvGroupAssign')) $('#dvGroupAssign').onchange=e=>{t.group_assigned_to=e.target.value||null;pushHistory(t,'group_assigned_to','—',t.group_assigned_to||'—');toast('Group assignment updated',t.group_assigned_to||'Cleared');};
-  $('#dvDue').onchange=e=>{t.due_date=new Date(e.target.value);t.is_overdue=t.due_date<new Date();toast('Due date set',fmtDT(t.due_date));};
-  $('#editTitle').onclick=()=>{const v=prompt('Edit ticket title',t.title);if(v&&v.trim()){t.title=v.trim();paintListKeepScroll();toast('Title updated');}};
+  $('#dvAssignee').onchange=e=>{t.assigned_to=e.target.value;t.assigned_name=agentName(e.target.value);pushHistory(t,'assigned_to','—',t.assigned_name);toast('👤 Reassigned',t.assigned_name);LOGS.unshift({at:new Date(),ticket:t.ticket_number,event:'ASSIGNED',actor:'Rahul Ukey',detail:'Assigned to '+t.assigned_name});};
+  if($('#dvAssignMe')) $('#dvAssignMe').onclick=(e)=>{e.stopPropagation();const old=t.assigned_name||'—';t.assigned_to=CURRENT_USER.email;t.assigned_name=CURRENT_USER.name;pushHistory(t,'assigned_to',old,CURRENT_USER.name);LOGS.unshift({at:new Date(),ticket:t.ticket_number,event:'ASSIGNED',actor:CURRENT_USER.name,detail:'Self-assigned to '+CURRENT_USER.name});paintListKeepScroll();toast('🙋 Self-Assigned','Now assigned to you');};
+  if($('#dvStoreAssign')) $('#dvStoreAssign').onchange=e=>{const store=STORES.find(s=>s.id===e.target.value);t.store=e.target.value||null;t.storeName=store?store.name:null;t.location=store?store.address:null;t.city=store?store.city:null;t.state=store?store.state:null;t.zone=store?store.zone:null;pushHistory(t,'store','—',t.storeName||'—');toast('📍 Store Updated',t.storeName||'Cleared');};
+  $('#dvDue').onchange=e=>{t.due_date=new Date(e.target.value);t.is_overdue=t.due_date<new Date();toast('📅 Due Date Updated',fmtDT(t.due_date));};
+  $('#editTitle').onclick=()=>{const v=prompt('Edit ticket title',t.title);if(v&&v.trim()){t.title=v.trim();paintListKeepScroll();toast('✏️ Title Updated',v.trim());}};
   $('#replyBtn').onclick=()=>openReplyModal(t);
   if($('#dvTagSelect')) $('#dvTagSelect').onchange=e=>{const v=e.target.value;if(v){t.tags=t.tags||[];if(!t.tags.includes(v)){t.tags.push(v);paintListKeepScroll();}}};
   $$('#dvTags [data-rmt]').forEach(b=>b.onclick=()=>{t.tags=t.tags.filter(x=>x!==b.dataset.rmt);paintListKeepScroll();});
@@ -829,7 +838,12 @@ function applyStatus(t,old,nw){
   LOGS.unshift({at:new Date(),ticket:t.ticket_number,event:'STATUS_CHANGE',actor:CURRENT_USER.name,detail:`${statusLabel(old)} → ${statusLabel(nw)}`});
   if(nw==='RESOLVED'){t.resolved_at=new Date();}
 }
-function transitionStatus(t,old,nw){ applyStatus(t,old,nw); toast('Status updated',titleCase(nw)); }
+function transitionStatus(t,old,nw){
+  applyStatus(t,old,nw);
+  const emojis={OPEN:'📋',INPROGRESS:'⚙️',VERIFY:'🔍',RESOLVED:'✅',CLOSED:'🔒',ESCALATED:'⬆️',AUTO_ESCALATED:'⬆️',REOPEN:'🔄'};
+  const emoji=emojis[nw]||'📊';
+  toast(`${emoji} Status Updated`,statusLabel(nw));
+}
 
 /* ============================================================ BULK ACTIONS */
 function paintBulkBar(){
@@ -866,17 +880,19 @@ function bulkAssign(list, email, name, isGroup){
   list.forEach(t=>{ if(isGroup){ t.group_assigned_to=name; pushHistory(t,'group_assigned_to','—',name); }
     else { t.assigned_to=email; t.assigned_name=name; pushHistory(t,'assigned_to','—',name); }
     LOGS.unshift({at:new Date(),ticket:t.ticket_number,event:'ASSIGNED',actor:CURRENT_USER.name,detail:`${isGroup?'Group ':''}Assigned to ${name} (bulk)`}); });
-  toast('Bulk assigned',`${list.length} ticket(s) → ${name}`); state.selected.clear(); paintListKeepScroll();
+  toast(`${isGroup?'👥':'👤'} Bulk Assigned`,`${list.length} ticket(s) → ${name}`); state.selected.clear(); paintListKeepScroll();
 }
 function bulkPriority(list,p){ list.forEach(t=>{const old=t.ticket_priority;t.ticket_priority=p;pushHistory(t,'priority',titleCase(old),titleCase(p));});
-  toast('Priority updated',`${list.length} ticket(s) → ${titleCase(p)}`); state.selected.clear(); paintListKeepScroll(); }
+  toast('🎯 Bulk Priority Updated',`${list.length} ticket(s) → ${titleCase(p)}`); state.selected.clear(); paintListKeepScroll(); }
 function bulkTag(list,tag){ list.forEach(t=>{t.tags=t.tags||[];if(!t.tags.includes(tag))t.tags.push(tag);pushHistory(t,'tag','—',tag);});
-  toast('Tag added',`"${tag}" → ${list.length} ticket(s)`); state.selected.clear(); paintListKeepScroll(); }
+  toast('🏷️ Tag Added',`"${tag}" → ${list.length} ticket(s)`); state.selected.clear(); paintListKeepScroll(); }
 function bulkStatus(list,nw){
   if(!list.length) return;
   if(nw==='RESOLVED'||nw==='CLOSED'){ openBulkResolveClose(list, nw==='RESOLVED'?'resolve':'close'); return; }
   list.forEach(t=>applyStatus(t,t.ticket_status,nw));
-  toast('Status updated',`${list.length} ticket(s) → ${statusLabel(nw)}`); state.selected.clear(); paintListKeepScroll();
+  const emojis={OPEN:'📋',INPROGRESS:'⚙️',VERIFY:'🔍',RESOLVED:'✅',CLOSED:'🔒',ESCALATED:'⬆️',AUTO_ESCALATED:'⬆️',REOPEN:'🔄'};
+  const emoji=emojis[nw]||'📊';
+  toast(`${emoji} Bulk Status Updated`,`${list.length} ticket(s) → ${statusLabel(nw)}`); state.selected.clear(); paintListKeepScroll();
 }
 function openBulkResolveClose(list, mode){
   const isResolve=mode==='resolve';
@@ -1011,7 +1027,7 @@ function openResolveCloseModal(t, mode, oldStatus, selectEl){
     t.history_audit.unshift({field:isResolve?'resolution':'closure', old:titleCase(oldStatus), neu:titleCase(nw),
       by:CURRENT_USER.email, at:new Date(), reason, category, note});
     t.updated_at=new Date();
-    closeModal(); paintListKeepScroll(); toast(title.replace('Ticket','')+'d', `${reason} · ${category}`);
+    closeModal(); paintListKeepScroll(); const emoji=isResolve?'✅':'🔒'; toast(`${emoji} Ticket ${isResolve?'Resolved':'Closed'}`, `${reason} · ${category}`);
   };
 }
 
