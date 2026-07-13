@@ -7,6 +7,7 @@ const view = $('#view');
 
 const esc = s => (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const titleCase = s => (s||'').replace(/_/g,' ').toLowerCase().replace(/\b\w/g,c=>c.toUpperCase());
+const statusLabel = s => ({VERIFY:'Under Verification'}[s] || titleCase(s));
 const fmtDT = d => d ? `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getFullYear()).slice(2)} ${d.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}` : '';
 const fmtAgo = d => { if(!d) return ''; const s=(Date.now()-d.getTime())/1000;
   if(s<60) return 'just now'; if(s<3600) return Math.floor(s/60)+'m ago';
@@ -14,7 +15,7 @@ const fmtAgo = d => { if(!d) return ''; const s=(Date.now()-d.getTime())/1000;
 const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const fmtDateAbs = d => d ? `${MON[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()} at ${d.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}` : '';
 const renderMentions = txt => { let s=esc(txt); AGENTS.forEach(a=>{ s=s.replace(new RegExp('@'+a.name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'g'), `<span class="ment">@${esc(a.name)}</span>`); }); return s; };
-const statusBadge = s => `<span class="badge b-${(s||'').toLowerCase()}">${titleCase(s)}</span>`;
+const statusBadge = s => `<span class="badge b-${(s||'').toLowerCase()}">${statusLabel(s)}</span>`;
 const prioBadge = p => `<span class="badge p-${(p||'').toLowerCase()}">${titleCase(p)}</span>`;
 const slaBadge = t => { if(!t.escalation_info && !t.is_overdue) return '';
   if(t.escalation_info) return `<span class="badge sla-breach">L${t.escalation_info.level} Breached</span>`;
@@ -28,6 +29,158 @@ function toast(title,msg,kind='ok'){
   const t=document.createElement('div'); t.className='toast '+kind;
   t.innerHTML=`<div class="t-ico">${ico}</div><div><div class="t-title">${esc(title)}</div>${msg?`<div class="t-msg">${esc(msg)}</div>`:''}</div>`;
   $('#toastWrap').appendChild(t); setTimeout(()=>{t.style.opacity='0';t.style.transform='translateX(40px)';setTimeout(()=>t.remove(),250);},2800);
+}
+
+/* ============================================================ STATUS INDICATOR */
+function updateStatusIndicator(){
+  const status = StatusService.getCurrentUserStatus();
+  const dot = $('#statusDot');
+  const label = $('#statusLabel');
+
+  // Check if unavailability is currently active (today is within the date range)
+  let isCurrentlyUnavailable = false;
+  if(status.status === 'not_available' && status.fromDate && status.tillDate) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const fromDateObj = new Date(status.fromDate);
+    const tillDateObj = new Date(status.tillDate);
+    isCurrentlyUnavailable = today >= fromDateObj && today <= tillDateObj;
+  }
+
+  if(dot){
+    dot.className = `status-dot ${isCurrentlyUnavailable ? 'unavailable' : 'available'}`;
+  }
+  if(label){
+    if(isCurrentlyUnavailable){
+      const formatted = StatusService.formatDateRange(status.fromDate, status.tillDate);
+      label.textContent = formatted;
+    } else if(status.status === 'not_available' && status.fromDate && status.tillDate) {
+      // Show upcoming unavailability
+      const formatted = StatusService.formatDateRange(status.fromDate, status.tillDate);
+      label.textContent = `Unavailable: ${formatted}`;
+    } else {
+      label.textContent = 'Available';
+    }
+  }
+}
+
+function openStatusPicker(){
+  const status = StatusService.getCurrentUserStatus();
+  const modal = document.createElement('div');
+  modal.className = 'status-modal-overlay';
+  modal.id = 'statusModal';
+  // Use simplest possible CSS with explicit positioning
+  modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:9999';
+  // Ensure the modal root container is visible
+  const modalRoot = $('#modalRoot');
+  if(modalRoot) modalRoot.style.display = 'block';
+  modal.innerHTML = `
+    <div class="status-modal" style="background:#fff;border-radius:12px;box-shadow:0 10px 40px rgba(0,0,0,0.15);width:90%;max-width:420px;animation:slideUp 0.2s ease-out">
+      <div class="status-modal-header" style="padding:20px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between">
+        <h3 style="margin:0;font-size:16px;font-weight:600;color:var(--text)">Update Availability Status</h3>
+        <button class="modal-close" onclick="document.getElementById('statusModal').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--muted);padding:0;width:24px;height:24px;display:flex;align-items:center;justify-content:center">✕</button>
+      </div>
+      <div class="status-modal-body" style="padding:20px">
+        <div class="status-radio-group" style="display:flex;flex-direction:column;gap:12px">
+          <label class="status-radio" style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:10px;border-radius:8px;transition:background 0.2s">
+            <input type="radio" name="status" value="available" ${status.status === 'available' ? 'checked' : ''} style="cursor:pointer;width:18px;height:18px">
+            <span style="font-size:14px;font-weight:500;color:var(--text)">Available</span>
+          </label>
+          <label class="status-radio" style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:10px;border-radius:8px;transition:background 0.2s">
+            <input type="radio" name="status" value="not_available" ${status.status === 'not_available' ? 'checked' : ''} style="cursor:pointer;width:18px;height:18px">
+            <span style="font-size:14px;font-weight:500;color:var(--text)">Not Available</span>
+          </label>
+        </div>
+        <div id="datePickerWrap" style="display:${status.status === 'not_available' ? 'block' : 'none'};margin-top:16px">
+          <div style="margin-bottom:12px">
+            <label class="status-label-text" style="display:block;font-size:13px;font-weight:600;color:var(--text);margin-bottom:6px">From</label>
+            <input type="date" id="fromDateInput" class="status-date-input" value="${status.fromDate || ''}" min="${new Date().toISOString().split('T')[0]}" style="width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;box-sizing:border-box">
+          </div>
+          <div>
+            <label class="status-label-text" style="display:block;font-size:13px;font-weight:600;color:var(--text);margin-bottom:6px">Till</label>
+            <input type="date" id="tillDateInput" class="status-date-input" value="${status.tillDate || ''}" min="${new Date().toISOString().split('T')[0]}" style="width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;box-sizing:border-box">
+          </div>
+          <div class="status-helper-text" style="font-size:12px;color:var(--muted);margin-top:6px">Select your unavailable period</div>
+        </div>
+      </div>
+      <div class="status-modal-footer" style="padding:16px 20px;border-top:1px solid var(--line);display:flex;gap:10px;justify-content:flex-end">
+        <button class="btn-secondary" onclick="document.getElementById('statusModal').remove()" style="padding:8px 16px;border-radius:6px;border:none;font-size:14px;font-weight:500;cursor:pointer;transition:all 0.2s;background:var(--line);color:var(--text)">Cancel</button>
+        <button class="btn-primary" id="statusSaveBtn" style="padding:8px 16px;border-radius:6px;border:none;font-size:14px;font-weight:500;cursor:pointer;transition:all 0.2s;background:var(--primary);color:#fff">Save Changes</button>
+      </div>
+    </div>
+  `;
+  $('#modalRoot').appendChild(modal);
+
+  const radios = modal.querySelectorAll('input[name="status"]');
+  const fromDateInput = modal.querySelector('#fromDateInput');
+  const tillDateInput = modal.querySelector('#tillDateInput');
+  const datePickerWrap = modal.querySelector('#datePickerWrap');
+  const saveBtn = modal.querySelector('#statusSaveBtn');
+
+  radios.forEach(r => {
+    r.onchange = () => {
+      const isUnavailable = r.value === 'not_available';
+      datePickerWrap.style.display = isUnavailable ? 'block' : 'none';
+      if(!isUnavailable) {
+        fromDateInput.value = '';
+        tillDateInput.value = '';
+      }
+    };
+  });
+
+  const hideModalRoot = () => {
+    const mr = $('#modalRoot');
+    if(mr && mr.children.length === 0) mr.style.display = 'none';
+  };
+
+  modal.onclick = (e) => {
+    if(e.target === modal) {
+      modal.remove();
+      hideModalRoot();
+    }
+  };
+
+  saveBtn.onclick = () => {
+    const selectedStatus = modal.querySelector('input[name="status"]:checked').value;
+    const fromDate = selectedStatus === 'not_available' ? fromDateInput.value : null;
+    const tillDate = selectedStatus === 'not_available' ? tillDateInput.value : null;
+
+    if(StatusService.setUserStatus(selectedStatus, fromDate, tillDate)){
+      updateStatusIndicator();
+      if(selectedStatus === 'available') {
+        toast('Status Updated', 'You are now available');
+      } else {
+        const formatted = StatusService.formatDateRange(fromDate, tillDate);
+        toast('Status Updated', `Not available from ${formatted}`);
+      }
+      modal.remove();
+      hideModalRoot();
+    }
+  };
+}
+
+function getAssigneeOptionsHTML(currentAssignee = null, includeUnavailable = true){
+  let html = '<option value="">Unassigned</option>';
+  const available = [];
+  const unavailable = [];
+
+  AGENTS.forEach(a => {
+    const isAvailable = StatusService.isAgentAvailable(a.email);
+    const isSelected = currentAssignee === a.email;
+    const status = StatusService.getAgentStatus(a.email);
+    const label = status.status === 'not_available' && status.fromDate && status.tillDate
+      ? `${a.name} (unavailable: ${StatusService.formatDateRange(status.fromDate, status.tillDate)})`
+      : a.name;
+
+    if(isAvailable || isSelected){
+      available.push(`<option value="${a.email}" ${isSelected ? 'selected' : ''}>${label}</option>`);
+    } else if(includeUnavailable){
+      unavailable.push(`<option value="${a.email}" disabled style="color:#999">${label} (unavailable)</option>`);
+    }
+  });
+
+  html += available.join('') + unavailable.join('');
+  return html;
 }
 
 /* ---------- state ---------- */
@@ -152,7 +305,7 @@ function renderTicketOverview(){
   const statusData=[
     {label:'Open',color:'#2563eb',value:KPI.OPEN},
     {label:'In Progress',color:'#fb923c',value:KPI.INPROGRESS},
-    {label:'Verify',color:'#0e7490',value:KPI.VERIFY},
+    {label:'Under Verification',color:'#0e7490',value:KPI.VERIFY},
     {label:'Resolved',color:'#22c55e',value:KPI.RESOLVED},
     {label:'Closed',color:'#94a3b8',value:KPI.CLOSED},
     {label:'Reopen',color:'#7c3aed',value:KPI.REOPEN},
@@ -179,7 +332,7 @@ function kpiGrid(){
   return `<div class="kpi-grid">
     <div class="kpi k-open"><div class="k-label">Open Tickets</div><div class="k-val">${KPI.OPEN}</div></div>
     <div class="kpi k-prog"><div class="k-label">In progress Tickets</div><div class="k-val">${KPI.INPROGRESS}</div></div>
-    <div class="kpi k-verify"><div class="k-label">Verify Tickets</div><div class="k-val">${KPI.VERIFY}</div></div>
+    <div class="kpi k-verify"><div class="k-label">Under Verification Tickets</div><div class="k-val">${KPI.VERIFY}</div></div>
     <div class="kpi k-res"><div class="k-label">Resolved Tickets</div><div class="k-val">${KPI.RESOLVED}</div></div>
     <div class="kpi k-closed"><div class="k-label">Closed Tickets</div><div class="k-val">${KPI.CLOSED}</div></div>
     <div class="kpi k-reopen"><div class="k-label">Reopen Tickets</div><div class="k-val">${KPI.REOPEN}</div></div>
@@ -215,7 +368,7 @@ function renderTickets(){
         <input class="field" id="fSearch" placeholder="Search Ticket..." value="${esc(f.search)}"></div>
       <select class="select fdrop" id="fAssignee"><option value="">Assignee</option>${AGENTS.map(a=>`<option value="${a.email}" ${f.assignee===a.email?'selected':''}>${a.name}</option>`).join('')}</select>
       <select class="select fdrop" id="fPriority"><option value="">Priority</option>${ENUM.priority.map(p=>`<option ${f.priority===p?'selected':''}>${p}</option>`).join('')}</select>
-      <select class="select fdrop" id="fStatus"><option value="">Status</option>${ENUM.status.map(s=>`<option ${f.status===s?'selected':''}>${s}</option>`).join('')}</select>
+      <select class="select fdrop" id="fStatus"><option value="">Status</option>${ENUM.status.map(s=>`<option value="${s}" ${f.status===s?'selected':''}>${statusLabel(s)}</option>`).join('')}</select>
       <select class="select fdrop" id="fTag"><option value="">Tags</option>${TAGS.map(t=>`<option ${f.tag===t?'selected':''}>${t}</option>`).join('')}</select>
       <button class="btn-ghost" id="moreOpt">More Options ${state.moreOptions?'<<':'>>'}</button>
     </div>
@@ -391,7 +544,7 @@ function createModalHTML(){
         <div><label class="lbl">Priority <span class="req">*</span></label>
           <select class="select" id="dPriority">${ENUM.priority.map(p=>`<option ${draft.priority===p?'selected':''}>${titleCase(p)}</option>`).join('')}</select></div>
         <div><label class="lbl">Assign To <span class="req">*</span></label>
-          <select class="select" id="dAssignee"><option value="">Select Assignee</option>${AGENTS.map(a=>`<option value="${a.email}" ${draft.assignee===a.email?'selected':''}>${a.name}</option>`).join('')}</select></div>
+          <select class="select" id="dAssignee">${getAssigneeOptionsHTML(draft.assignee)}</select></div>
       </div>
       <div style="margin-top:16px"><label class="lbl">Description <span class="req">*</span></label>${richText('dDesc',draft.desc,8000)}</div>
       <div style="margin-top:16px"><label class="lbl">Product Name/SKU</label><input class="field" id="dSku" placeholder="e.g., Gold Necklace SKU-123" value="${esc(draft.sku)}"></div>
@@ -592,7 +745,7 @@ function ticketDetailHTML(t){
       <div class="detail-title">${esc(t.title)} <button class="btn-ghost" id="editTitle" title="Edit">✎</button></div>
       <div class="detail-controls">
         <select class="select" id="dvPriority">${ENUM.priority.map(p=>`<option ${t.ticket_priority===p?'selected':''}>${titleCase(p)}</option>`).join('')}</select>
-        <select class="select" id="dvStatus">${ENUM.status.map(s=>`<option ${t.ticket_status===s?'selected':''}>${titleCase(s)}</option>`).join('')}</select>
+        <select class="select" id="dvStatus">${ENUM.status.map(s=>`<option value="${s}" ${t.ticket_status===s?'selected':''}>${statusLabel(s)}</option>`).join('')}</select>
         <select class="select" id="dvGroupAssign"><option value="">Assign group</option>${GROUPS.concat(STORES.map(s=>s.name)).map(g=>`<option ${t.group_assigned_to===g?'selected':''}>${esc(g)}</option>`).join('')}</select>
         <input type="date" class="select" id="dvDue" value="${t.due_date?t.due_date.toISOString().slice(0,10):''}">
       </div>
@@ -611,7 +764,7 @@ function ticketDetailHTML(t){
       <div class="panel"><div class="kv-l">Customer</div>${t.customer_info?`<div class="cust-line" style="margin-top:8px"><div class="avatar">${initials(t.customer_info.name)}</div>
         <div><div class="c-name">${esc(maskName(t,t.customer_info.name))}</div><div class="c-sub">${esc(maskPhone(t,t.customer_info.phone))}</div><div class="c-sub">${esc(maskEmail(t,t.customer_info.email))}</div></div></div>`:'<div class="page-sub">No customer linked</div>'}</div>
       <div class="panel"><div class="kv-l">Assigned To</div>
-        <select class="select" id="dvAssignee" style="background:#fff;margin-top:8px"><option value="">Unassigned</option>${AGENTS.map(a=>`<option value="${a.email}" ${t.assigned_to===a.email?'selected':''}>${a.name}</option>`).join('')}</select>
+        <select class="select" id="dvAssignee" style="background:#fff;margin-top:8px">${getAssigneeOptionsHTML(t.assigned_to)}</select>
         ${t.assigned_to===CURRENT_USER.email
           ? `<button class="btn btn-light btn-sm" id="dvAssignMe" style="margin-top:8px" disabled>✓ Assigned to you</button>`
           : `<button class="btn btn-light btn-sm" id="dvAssignMe" style="margin-top:8px">👤 Assign to me</button>`}</div>
@@ -647,7 +800,7 @@ function wireDetail(t){
   $('#dvStatus').onchange=e=>{const old=t.ticket_status;const nw=e.target.value.toUpperCase().replace(/ /g,'_');
     if(nw==='RESOLVED'){ openResolveCloseModal(t,'resolve',old,e.target); return; }
     if(nw==='CLOSED'){ openResolveCloseModal(t,'close',old,e.target); return; }
-    transitionStatus(t,old,nw);paintListKeepScroll();};
+    transitionStatus(t,old,nw);Array.from(e.target.options).forEach(opt=>{opt.selected=opt.value===nw;});paintListKeepScroll();};
   $('#dvAssignee').onchange=e=>{t.assigned_to=e.target.value;t.assigned_name=agentName(e.target.value);pushHistory(t,'assigned_to','—',t.assigned_name);toast('Reassigned',t.assigned_name);LOGS.unshift({at:new Date(),ticket:t.ticket_number,event:'ASSIGNED',actor:'Rahul Ukey',detail:'Assigned to '+t.assigned_name});};
   if($('#dvAssignMe')) $('#dvAssignMe').onclick=(e)=>{e.stopPropagation();const old=t.assigned_name||'—';t.assigned_to=CURRENT_USER.email;t.assigned_name=CURRENT_USER.name;pushHistory(t,'assigned_to',old,CURRENT_USER.name);LOGS.unshift({at:new Date(),ticket:t.ticket_number,event:'ASSIGNED',actor:CURRENT_USER.name,detail:'Self-assigned to '+CURRENT_USER.name});paintListKeepScroll();toast('Assigned to you',CURRENT_USER.name);};
   if($('#dvGroupAssign')) $('#dvGroupAssign').onchange=e=>{t.group_assigned_to=e.target.value||null;pushHistory(t,'group_assigned_to','—',t.group_assigned_to||'—');toast('Group assignment updated',t.group_assigned_to||'Cleared');};
@@ -672,8 +825,8 @@ function wireDetail(t){
   if($('#billToggle')) $('#billToggle').onclick=(e)=>{e.stopPropagation();const li=$('#billItems');if(li){const open=li.style.display!=='none';li.style.display=open?'none':'block';$('#billChevron').textContent=open?'⌄':'⌃';}};
 }
 function applyStatus(t,old,nw){
-  t.ticket_status=nw; pushHistory(t,'status',titleCase(old),titleCase(nw));
-  LOGS.unshift({at:new Date(),ticket:t.ticket_number,event:'STATUS_CHANGE',actor:CURRENT_USER.name,detail:`${titleCase(old)} → ${titleCase(nw)}`});
+  t.ticket_status=nw; pushHistory(t,'status',statusLabel(old),statusLabel(nw));
+  LOGS.unshift({at:new Date(),ticket:t.ticket_number,event:'STATUS_CHANGE',actor:CURRENT_USER.name,detail:`${statusLabel(old)} → ${statusLabel(nw)}`});
   if(nw==='RESOLVED'){t.resolved_at=new Date();}
 }
 function transitionStatus(t,old,nw){ applyStatus(t,old,nw); toast('Status updated',titleCase(nw)); }
@@ -693,9 +846,9 @@ function paintBulkBar(){
     <div class="bb-actions">
       <button class="btn btn-light btn-sm" id="bbAssignMe">👤 Assign to me</button>
       <select class="select bb-sel" id="bbAssign"><option value="">Assign to…</option>
-        <optgroup label="Agents">${AGENTS.map(a=>`<option value="a:${a.email}">${a.name}</option>`).join('')}</optgroup>
+        <optgroup label="Agents">${AGENTS.map(a=>{const s=StatusService.getAgentStatus(a.email);return `<option value="a:${a.email}" ${StatusService.isAgentAvailable(a.email)?'':'disabled'}>${a.name}${s.status==='not_available'&&s.fromDate&&s.tillDate?` (unavailable: ${StatusService.formatDateRange(s.fromDate,s.tillDate)})`:''}</option>`;}).join('')}</optgroup>
         <optgroup label="Groups">${GROUPS.map(g=>`<option value="g:${esc(g)}">${esc(g)}</option>`).join('')}</optgroup></select>
-      <select class="select bb-sel" id="bbStatus"><option value="">Status…</option>${ENUM.status.map(s=>`<option>${titleCase(s)}</option>`).join('')}</select>
+      <select class="select bb-sel" id="bbStatus"><option value="">Status…</option>${ENUM.status.map(s=>`<option value="${s}">${statusLabel(s)}</option>`).join('')}</select>
       <select class="select bb-sel" id="bbPriority"><option value="">Priority…</option>${ENUM.priority.map(p=>`<option>${titleCase(p)}</option>`).join('')}</select>
       <select class="select bb-sel" id="bbTag"><option value="">Add tag…</option>${TAGS.map(t=>`<option>${esc(t)}</option>`).join('')}</select>
     </div>`;
@@ -705,8 +858,7 @@ function paintBulkBar(){
   $('#bbAssignMe').onclick=()=>bulkAssign(sel(),CURRENT_USER.email,CURRENT_USER.name,false);
   $('#bbAssign').onchange=e=>{const v=e.target.value;if(!v)return;const isGroup=v.startsWith('g:');const val=v.slice(2);
     bulkAssign(sel(), isGroup?null:val, isGroup?val:agentName(val), isGroup);};
-  $('#bbStatus').onchange=e=>{if(e.target.value) bulkStatus(sel(), e.target.value.toUpperCase().replace(/ /g,'_'));};
-  $('#bbPriority').onchange=e=>{if(e.target.value) bulkPriority(sel(), e.target.value.toUpperCase());};
+  $('#bbStatus').onchange=e=>{if(e.target.value) {bulkStatus(sel(), e.target.value.toUpperCase().replace(/ /g,'_'));e.target.value='';}};  $('#bbPriority').onchange=e=>{if(e.target.value) bulkPriority(sel(), e.target.value.toUpperCase());};
   $('#bbTag').onchange=e=>{if(e.target.value) bulkTag(sel(), e.target.value);};
 }
 function bulkAssign(list, email, name, isGroup){
@@ -724,7 +876,7 @@ function bulkStatus(list,nw){
   if(!list.length) return;
   if(nw==='RESOLVED'||nw==='CLOSED'){ openBulkResolveClose(list, nw==='RESOLVED'?'resolve':'close'); return; }
   list.forEach(t=>applyStatus(t,t.ticket_status,nw));
-  toast('Status updated',`${list.length} ticket(s) → ${titleCase(nw)}`); state.selected.clear(); paintListKeepScroll();
+  toast('Status updated',`${list.length} ticket(s) → ${statusLabel(nw)}`); state.selected.clear(); paintListKeepScroll();
 }
 function openBulkResolveClose(list, mode){
   const isResolve=mode==='resolve';
@@ -920,7 +1072,7 @@ function renderSupport(){
     <div class="support-list">
       <h3>Support Tickets</h3>
       <div class="search-field" style="margin-bottom:10px"><svg viewBox="0 0 24 24" width="16" height="16"><path d="M21 21l-4.35-4.35M11 19a8 8 0 1 1 0-16 8 8 0 0 1 0 16z" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg><input class="field" id="sSearch" placeholder="Search Ticket" style="padding-left:38px"></div>
-      <div class="sl-filters"><select class="select" id="sStatus"><option value="">All Statuses</option>${ENUM.status.map(s=>`<option>${s}</option>`).join('')}</select>
+      <div class="sl-filters"><select class="select" id="sStatus"><option value="">All Statuses</option>${ENUM.status.map(s=>`<option value="${s}">${statusLabel(s)}</option>`).join('')}</select>
         <select class="select" id="sProject"><option value="">All Projects</option>${PROJECTS.map(p=>`<option value="${p.project_id}">${esc(p.name)}</option>`).join('')}</select>
         <button class="btn btn-light" title="Sort">⇅</button></div>
       <div class="sl-cards" id="sCards"></div>
@@ -934,7 +1086,7 @@ function paintSupportList(){
   const q=($('#sSearch')?.value||'').toLowerCase(), st=$('#sStatus')?.value, pr=$('#sProject')?.value;
   const rows=TICKETS.filter(t=>(!q||t.title.toLowerCase().includes(q)||t.ticket_number.toLowerCase().includes(q))&&(!st||t.ticket_status===st)&&(!pr||t.project_id===pr));
   $('#sCards').innerHTML=rows.map(t=>`<div class="sl-card ${t.ticket_number===supportActive?'active':''}" data-num="${t.ticket_number}">
-    <div class="slc-top"><span class="slc-num">${t.ticket_number}</span><span class="b-pill" style="background:${stColor(t.ticket_status)}">${titleCase(t.ticket_status==='AUTO_ESCALATED'?'OPEN':t.ticket_status)}</span></div>
+    <div class="slc-top"><span class="slc-num">${t.ticket_number}</span><span class="b-pill" style="background:${stColor(t.ticket_status)}">${statusLabel(t.ticket_status==='AUTO_ESCALATED'?'OPEN':t.ticket_status)}</span></div>
     <div class="slc-title">${esc(t.title)}</div>
     <div class="slc-agent">🎧 ${esc(t.assigned_name||agentName(t.assigned_to)||'Unassigned')}</div></div>`).join('')||'<div class="page-sub">No tickets</div>';
   $$('#sCards .sl-card').forEach(c=>c.onclick=()=>{supportActive=c.dataset.num;renderSupport();});
@@ -1107,4 +1259,10 @@ $$('[data-route]').forEach(n=>{if(n.classList.contains('nav-item')&&!n.classList
 window.go=go;
 window.router=router;
 if(typeof M!=='undefined' && M.bootShell) M.bootShell();
+
+/* ============================================================ STATUS INDICATOR INIT */
+updateStatusIndicator();
+const statusBtn = $('#statusIndicatorBtn');
+if(statusBtn) statusBtn.onclick = openStatusPicker;
+
 router();

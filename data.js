@@ -52,12 +52,12 @@ const SLA = {
 };
 
 const AGENTS = [
-  {email:'rahul.ukey@karnival.com', name:'Rahul Ukey'},
-  {email:'sushil.sharma@karnival.com', name:'Sushil Sharma'},
-  {email:'siva@karnival.com', name:'siva'},
-  {email:'siva.kumar@karnival.com', name:'Siva Kumar'},
-  {email:'priya.menon@karnival.com', name:'Priya Menon'},
-  {email:'arjun.rao@karnival.com', name:'Arjun Rao'},
+  {email:'rahul.ukey@karnival.com', name:'Rahul Ukey', status:'available', fromDate:null, tillDate:null},
+  {email:'sushil.sharma@karnival.com', name:'Sushil Sharma', status:'available', fromDate:null, tillDate:null},
+  {email:'siva@karnival.com', name:'siva', status:'available', fromDate:null, tillDate:null},
+  {email:'siva.kumar@karnival.com', name:'Siva Kumar', status:'available', fromDate:null, tillDate:null},
+  {email:'priya.menon@karnival.com', name:'Priya Menon', status:'available', fromDate:null, tillDate:null},
+  {email:'arjun.rao@karnival.com', name:'Arjun Rao', status:'available', fromDate:null, tillDate:null},
 ];
 
 const GROUPS = ['Escalations Queue','Tier-2 Support','Store Ops','Logistics Desk'];
