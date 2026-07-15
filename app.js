@@ -1275,12 +1275,12 @@ function buildBrandHierarchy(statusCode){
   const hierarchy = {};
 
   filtered.forEach(ticket => {
-    const brand = ticket.brand || 'Unknown';
+    const brand = ticket.brand_id || 'Unknown';
     const country = ticket.country || 'India';
     const zone = ticket.zone || 'Unknown';
     const state = ticket.state || 'Unknown';
     const city = ticket.city || 'Unknown';
-    const store = ticket.storeName || 'Unknown';
+    const store = ticket.store_name || 'Unknown';
 
     if (!hierarchy[brand]) hierarchy[brand] = { count: 0, countries: {} };
     hierarchy[brand].count++;

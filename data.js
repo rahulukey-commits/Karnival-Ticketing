@@ -243,6 +243,28 @@ const TICKETS = [
     customer:{name:'Sahil Verma', email:'sahil@example.com', phone:'9333344455', id:'CUST-90871'},
     description:'Customer reopened — replacement also arrived damaged.',
     categories:['Delivery','Product Quality'], tags:['delay'], ageH:8}),
+  // Additional test data for brand hierarchy
+  mkTicket({num:'TKT-105', brand:'Van Heusen', project:'vh_live', projectName:'Live Dashboard Testing',
+    title:'Size mismatch on shirt', status:'OPEN', priority:'MEDIUM', source:'MANUAL', manualSource:'IN_STORE_COMPLAINT',
+    store:'VH4521', storeName:'Van Heusen Store-VH4521', city:'Bengaluru', state:'KA', zone:'South',
+    assigned:'siva.kumar@karnival.com', assignedName:'Siva Kumar', createdBy:'siva.kumar@karnival.com',
+    customer:{name:'Test Customer 1', email:'test1@example.com', phone:'9999999991', id:'CUST-TEST1'}, ageH:12}),
+  mkTicket({num:'TKT-106', brand:'Peter England', project:'pe_test_2', projectName:'Peter England Test Project 2',
+    title:'Color fading issue', status:'OPEN', priority:'HIGH', source:'EMAIL',
+    city:'Mumbai', state:'MH', zone:'West', assigned:'rahul.ukey@karnival.com', assignedName:'Rahul Ukey',
+    customer:{name:'Test Customer 2', email:'test2@example.com', phone:'9999999992', id:'CUST-TEST2'}, ageH:6}),
+  mkTicket({num:'TKT-107', brand:'Allen Solly', project:'pe_test_2', projectName:'Peter England Test Project 2',
+    title:'Button detached', status:'OPEN', priority:'LOW', source:'MANUAL', city:'Delhi', state:'DL', zone:'North',
+    assigned:'priya.menon@karnival.com', assignedName:'Priya Menon', customer:{name:'Test Customer 3', email:'test3@example.com', phone:'9999999993', id:'CUST-TEST3'}, ageH:24}),
+  mkTicket({num:'TKT-108', brand:'Louis Philippe', project:'pe_test_2', projectName:'Peter England Test Project 2',
+    title:'Seam splitting', status:'OPEN', priority:'MEDIUM', source:'WHATSAPP', city:'Bengaluru', state:'KA', zone:'South',
+    assigned:'siva@karnival.com', assignedName:'siva', customer:{name:'Test Customer 4', email:'test4@example.com', phone:'9999999994', id:'CUST-TEST4'}, ageH:3}),
+  mkTicket({num:'TKT-109', brand:'Van Heusen', project:'vh_live', projectName:'Live Dashboard Testing',
+    title:'Sleeve length incorrect', status:'OPEN', priority:'MEDIUM', source:'MANUAL', city:'Mumbai', state:'MH', zone:'West',
+    assigned:'sushil.sharma@karnival.com', assignedName:'Sushil Sharma', customer:{name:'Test Customer 5', email:'test5@example.com', phone:'9999999995', id:'CUST-TEST5'}, ageH:18}),
+  mkTicket({num:'TKT-110', brand:'Peter England', project:'pe_test_2', projectName:'Peter England Test Project 2',
+    title:'Zipper broken', status:'OPEN', priority:'HIGH', source:'SURVEY', city:'Pune', state:'MH', zone:'West',
+    assigned:'rahul.ukey@karnival.com', assignedName:'Rahul Ukey', customer:{name:'Test Customer 6', email:'test6@example.com', phone:'9999999996', id:'CUST-TEST6'}, ageH:9}),
 ];
 
 // status counts (mirrors All Tickets KPIs in the recording)
