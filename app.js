@@ -387,6 +387,13 @@ function renderTickets(){
   bind('fFrom','from'); bind('fTo','to');
   $('#moreOpt').onclick=()=>{state.moreOptions=!state.moreOptions;renderTickets();};
   if($('#clearF')) $('#clearF').onclick=()=>{state.filters={search:'',assignee:'',priority:'',status:'',tag:'',brand:'',project:'',from:'',to:''};state.page=1;renderTickets();};
+  /* BRAND BREAKDOWN MODAL — KPI card click handlers */
+  const kpiMap={'k-open':'OPEN', 'k-prog':'INPROGRESS', 'k-verify':'VERIFY', 'k-res':'RESOLVED', 'k-closed':'CLOSED', 'k-reopen':'REOPEN'};
+  Object.entries(kpiMap).forEach(([klass,status])=>{
+    const el=document.querySelector(`.${klass}`);
+    if(el){el.style.cursor='pointer'; el.onclick=()=>openBrandBreakdownModal(status);}
+  });
+  /* END BRAND BREAKDOWN MODAL */
   paintList();
 }
 function paintList(){
@@ -1261,6 +1268,136 @@ function openModal(html,width,opts={}){
 }
 function closeModal(){ $('#modalRoot').classList.remove('show'); $('#modalRoot').innerHTML=''; document.body.style.overflow=''; }
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('#modalRoot').classList.contains('show'))closeModal();});
+
+/* ============================================================ BRAND BREAKDOWN MODAL (Easy to remove as a block) */
+function buildBrandHierarchy(statusCode){
+  const filtered = TICKETS.filter(t => t.ticket_status === statusCode);
+  const hierarchy = {};
+
+  filtered.forEach(ticket => {
+    const brand = ticket.brand || 'Unknown';
+    const country = ticket.country || 'India';
+    const zone = ticket.zone || 'Unknown';
+    const state = ticket.state || 'Unknown';
+    const city = ticket.city || 'Unknown';
+    const store = ticket.storeName || 'Unknown';
+
+    if (!hierarchy[brand]) hierarchy[brand] = { count: 0, countries: {} };
+    hierarchy[brand].count++;
+
+    if (!hierarchy[brand].countries[country]) hierarchy[brand].countries[country] = { count: 0, zones: {} };
+    hierarchy[brand].countries[country].count++;
+
+    if (!hierarchy[brand].countries[country].zones[zone]) hierarchy[brand].countries[country].zones[zone] = { count: 0, states: {} };
+    hierarchy[brand].countries[country].zones[zone].count++;
+
+    if (!hierarchy[brand].countries[country].zones[zone].states[state]) hierarchy[brand].countries[country].zones[zone].states[state] = { count: 0, cities: {} };
+    hierarchy[brand].countries[country].zones[zone].states[state].count++;
+
+    if (!hierarchy[brand].countries[country].zones[zone].states[state].cities[city]) hierarchy[brand].countries[country].zones[zone].states[state].cities[city] = { count: 0, stores: {} };
+    hierarchy[brand].countries[country].zones[zone].states[state].cities[city].count++;
+
+    if (!hierarchy[brand].countries[country].zones[zone].states[state].cities[city].stores[store]) hierarchy[brand].countries[country].zones[zone].states[state].cities[city].stores[store] = { count: 0 };
+    hierarchy[brand].countries[country].zones[zone].states[state].cities[city].stores[store].count++;
+  });
+
+  return hierarchy;
+}
+
+function renderBrandBreakdownTable(hierarchy, expandedState){
+  let html = '<table class="bd-table"><tbody>';
+
+  const sortByCount = (obj) => Object.entries(obj).sort((a, b) => b[1].count - a[1].count);
+
+  sortByCount(hierarchy).forEach(([brand, brandData]) => {
+    const brandId = `brand-${brand}`;
+    const isBrandExpanded = expandedState[brandId];
+    html += `<tr class="bd-row bd-level-0" data-id="${brandId}">
+      <td class="bd-cell"><span class="bd-chevron ${isBrandExpanded ? 'open' : ''}" onclick="toggleBrandBreakdown('${brandId}')">▶</span> ${esc(brand)}</td>
+      <td class="bd-count">${brandData.count}</td>
+    </tr>`;
+
+    if (isBrandExpanded) {
+      sortByCount(brandData.countries).forEach(([country, countryData]) => {
+        const countryId = `${brandId}-country-${country}`;
+        const isCountryExpanded = expandedState[countryId];
+        html += `<tr class="bd-row bd-level-1" data-id="${countryId}" style="display:table-row">
+          <td class="bd-cell"><span class="bd-chevron ${isCountryExpanded ? 'open' : ''}" onclick="toggleBrandBreakdown('${countryId}')">▶</span> ${esc(country)}</td>
+          <td class="bd-count">${countryData.count}</td>
+        </tr>`;
+
+        if (isCountryExpanded) {
+          sortByCount(countryData.zones).forEach(([zone, zoneData]) => {
+            const zoneId = `${countryId}-zone-${zone}`;
+            const isZoneExpanded = expandedState[zoneId];
+            html += `<tr class="bd-row bd-level-2" data-id="${zoneId}" style="display:table-row">
+              <td class="bd-cell"><span class="bd-chevron ${isZoneExpanded ? 'open' : ''}" onclick="toggleBrandBreakdown('${zoneId}')">▶</span> ${esc(zone)}</td>
+              <td class="bd-count">${zoneData.count}</td>
+            </tr>`;
+
+            if (isZoneExpanded) {
+              sortByCount(zoneData.states).forEach(([state, stateData]) => {
+                const stateId = `${zoneId}-state-${state}`;
+                const isStateExpanded = expandedState[stateId];
+                html += `<tr class="bd-row bd-level-3" data-id="${stateId}" style="display:table-row">
+                  <td class="bd-cell"><span class="bd-chevron ${isStateExpanded ? 'open' : ''}" onclick="toggleBrandBreakdown('${stateId}')">▶</span> ${esc(state)}</td>
+                  <td class="bd-count">${stateData.count}</td>
+                </tr>`;
+
+                if (isStateExpanded) {
+                  sortByCount(stateData.cities).forEach(([city, cityData]) => {
+                    const cityId = `${stateId}-city-${city}`;
+                    const isCityExpanded = expandedState[cityId];
+                    html += `<tr class="bd-row bd-level-4" data-id="${cityId}" style="display:table-row">
+                      <td class="bd-cell"><span class="bd-chevron ${isCityExpanded ? 'open' : ''}" onclick="toggleBrandBreakdown('${cityId}')">▶</span> ${esc(city)}</td>
+                      <td class="bd-count">${cityData.count}</td>
+                    </tr>`;
+
+                    if (isCityExpanded) {
+                      sortByCount(cityData.stores).forEach(([store, storeData]) => {
+                        const storeId = `${cityId}-store-${store}`;
+                        html += `<tr class="bd-row bd-level-5" data-id="${storeId}" style="display:table-row">
+                          <td class="bd-cell" style="padding-left:100px">${esc(store)}</td>
+                          <td class="bd-count">${storeData.count}</td>
+                        </tr>`;
+                      });
+                    }
+                  });
+                }
+              });
+            }
+          });
+        }
+      });
+    }
+  });
+
+  html += '</tbody></table>';
+  return html;
+}
+
+let brandBreakdownState = {};
+function toggleBrandBreakdown(id){
+  brandBreakdownState[id] = !brandBreakdownState[id];
+  const modal = $('#modalRoot .modal');
+  if (modal) modal.innerHTML = brandBreakdownState.tableHtml;
+}
+
+function openBrandBreakdownModal(statusCode){
+  const statusName = statusLabel(statusCode) || titleCase(statusCode);
+  const hierarchy = buildBrandHierarchy(statusCode);
+  brandBreakdownState = {};
+  brandBreakdownState.tableHtml = renderBrandBreakdownTable(hierarchy, brandBreakdownState);
+
+  const html = `<div class="bd-header">
+    <h2>${esc(statusName)}</h2>
+    <button class="bd-close" onclick="closeModal()">×</button>
+  </div>
+  <div class="bd-content">${brandBreakdownState.tableHtml}</div>`;
+
+  openModal(html, null, { full: true });
+}
+/* END BRAND BREAKDOWN MODAL */
 
 /* ============================================================ NAV + BOOT */
 /* accordion — one group open at a time, exactly like the live portal */

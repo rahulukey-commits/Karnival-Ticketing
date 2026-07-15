@@ -972,3 +972,58 @@ body.fp-open{overflow:hidden}
   color: var(--text)
 }
 .btn-secondary:hover{ background: var(--line-2) }
+
+/* ===== BRAND BREAKDOWN MODAL (Easy to remove as a block) ===== */
+.bd-header{
+  display:flex;justify-content:space-between;align-items:center;padding:20px;border-bottom:1px solid var(--line);background:var(--field)
+}
+.bd-header h2{
+  margin:0;font-size:18px;font-weight:600;color:var(--text)
+}
+.bd-close{
+  background:none;border:none;font-size:28px;cursor:pointer;color:var(--muted);padding:0;width:30px;height:30px;display:flex;align-items:center;justify-content:center
+}
+.bd-close:hover{ color:var(--text) }
+.bd-content{
+  padding:20px;overflow-y:auto;max-height:calc(100vh - 120px)
+}
+.bd-table{
+  width:100%;border-collapse:collapse;font-size:14px
+}
+.bd-table tbody tr{
+  border-bottom:1px solid var(--line-2)
+}
+.bd-table tbody tr:hover{
+  background:var(--field)
+}
+.bd-row.bd-level-0 .bd-cell{
+  padding:12px 16px;font-weight:600;color:var(--text)
+}
+.bd-row.bd-level-1 .bd-cell{
+  padding:10px 16px 10px 36px;color:var(--text)
+}
+.bd-row.bd-level-2 .bd-cell{
+  padding:10px 16px 10px 56px;color:var(--ink-2)
+}
+.bd-row.bd-level-3 .bd-cell{
+  padding:10px 16px 10px 76px;color:var(--ink-2)
+}
+.bd-row.bd-level-4 .bd-cell{
+  padding:10px 16px 10px 96px;color:var(--ink-2)
+}
+.bd-row.bd-level-5 .bd-cell{
+  padding:10px 16px 10px 100px;color:var(--muted);font-size:13px
+}
+.bd-cell{
+  display:flex;align-items:center;gap:8px
+}
+.bd-chevron{
+  display:inline-block;width:16px;cursor:pointer;transition:transform 0.2s;color:var(--muted);user-select:none
+}
+.bd-chevron.open{
+  transform:rotate(90deg)
+}
+.bd-count{
+  text-align:right;padding:12px 16px;font-weight:600;color:var(--primary);min-width:80px
+}
+/* END BRAND BREAKDOWN MODAL */
