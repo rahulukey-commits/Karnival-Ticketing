@@ -1376,24 +1376,25 @@ function renderBrandBreakdownTable(hierarchy, expandedState){
   return html;
 }
 
-let brandBreakdownState = {};
+let brandBreakdownState = {hierarchy: null, statusCode: null};
 function toggleBrandBreakdown(id){
   brandBreakdownState[id] = !brandBreakdownState[id];
-  const modal = $('#modalRoot .modal');
-  if (modal) modal.innerHTML = brandBreakdownState.tableHtml;
+  const newTableHtml = renderBrandBreakdownTable(brandBreakdownState.hierarchy, brandBreakdownState);
+  const content = $('#modalRoot .modal .bd-content');
+  if (content) content.innerHTML = newTableHtml;
 }
 
 function openBrandBreakdownModal(statusCode){
   const statusName = statusLabel(statusCode) || titleCase(statusCode);
   const hierarchy = buildBrandHierarchy(statusCode);
-  brandBreakdownState = {};
-  brandBreakdownState.tableHtml = renderBrandBreakdownTable(hierarchy, brandBreakdownState);
+  brandBreakdownState = {hierarchy: hierarchy, statusCode: statusCode};
+  const tableHtml = renderBrandBreakdownTable(hierarchy, brandBreakdownState);
 
   const html = `<div class="bd-header">
     <h2>${esc(statusName)}</h2>
     <button class="bd-close" onclick="closeModal()">×</button>
   </div>
-  <div class="bd-content">${brandBreakdownState.tableHtml}</div>`;
+  <div class="bd-content">${tableHtml}</div>`;
 
   openModal(html, null, { full: true });
 }
