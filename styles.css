@@ -528,7 +528,7 @@ label.lbl .req{color:#ef4444}
 .avatar-wrap{position:relative}
 .avatar{position:relative;transition:transform 0.15s}
 .avatar:hover{transform:scale(1.05)}
-.avatar-wrap .status-dot{position:absolute;top:-4px;right:-4px;width:16px;height:16px;border-radius:50%;border:0.5px solid rgba(255,255,255,0.6);background:#10b981;display:block;animation:none;box-shadow:none}
+.avatar-wrap .status-dot{position:absolute;top:-2px;right:-2px;width:12px;height:12px;border-radius:50%;border:0.5px solid rgba(255,255,255,0.6);background:#10b981;display:block;animation:none;box-shadow:none}
 .status-dot.unavailable{background:#9ca3af}
 .profile-dropdown{position:absolute;right:0;top:50px;width:320px;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow-lg);z-index:85;overflow:hidden}
 .profile-greeting{padding:16px 18px;font-weight:600;color:var(--ink);border-bottom:1px solid var(--line-2)}
