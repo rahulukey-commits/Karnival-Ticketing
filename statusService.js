@@ -28,12 +28,11 @@ const StatusService = {
 
       const fromDateObj = new Date(fromDate);
       const tillDateObj = new Date(tillDate);
-      const tomorrow = new Date();
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      tomorrow.setHours(0, 0, 0, 0);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
 
-      if (fromDateObj < tomorrow) {
-        toast('Invalid Date', 'From date must be in the future', 'warn');
+      if (fromDateObj < today) {
+        toast('Invalid Date', 'From date must be today or later', 'warn');
         return false;
       }
 
