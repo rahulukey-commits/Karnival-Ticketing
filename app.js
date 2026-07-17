@@ -71,9 +71,9 @@ function updateStatusIndicator(){
     dot.className = `status-dot ${isCurrentlyUnavailable ? 'unavailable' : 'available'}`;
   }
 
-  // Update profile dropdown — status button shows only the status word
+  // Update profile dropdown — status button shows only the status word based on TODAY's availability
   if(profileStatusText){
-    if(status.status === 'not_available') {
+    if(isCurrentlyUnavailable) {
       profileStatusText.textContent = 'Unavailable';
     } else {
       profileStatusText.textContent = 'Available';
