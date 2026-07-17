@@ -524,6 +524,30 @@ label.lbl .req{color:#ef4444}
 .brand-opt{padding:11px 18px;cursor:pointer;font-size:13.5px}
 .brand-opt:hover{background:var(--primary-050)}
 
+/* profile dropdown */
+.avatar-wrap{position:relative}
+.avatar{position:relative;transition:transform 0.15s}
+.avatar:hover{transform:scale(1.05)}
+.status-dot{position:absolute;top:-3px;right:-3px;width:16px;height:16px;border-radius:50%;border:2px solid #fff;background:#10b981}
+.status-dot.unavailable{background:#9ca3af}
+.profile-dropdown{position:absolute;right:0;top:50px;width:320px;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow-lg);z-index:85;overflow:hidden}
+.profile-greeting{padding:16px 18px;font-weight:600;color:var(--ink);border-bottom:1px solid var(--line-2)}
+.profile-status-section{padding:14px 18px;border-bottom:1px solid var(--line-2)}
+.profile-status-row{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.profile-status-label{font-size:13px;color:var(--muted);font-weight:500}
+.profile-status-btn{flex:1;display:flex;align-items:center;justify-content:space-between;background:var(--field);border:1px solid var(--line);border-radius:6px;padding:8px 10px;font-size:13px;font-weight:500;color:var(--ink);cursor:pointer;transition:background 0.2s}
+.profile-status-btn:hover{background:var(--bg)}
+.profile-status-arrow{color:var(--muted);font-size:11px}
+.profile-unavailable-info{font-size:12px;color:var(--muted);font-weight:400;line-height:1.4}
+.profile-divider{border:none;border-top:1px solid var(--line-2);margin:0}
+.profile-item{display:block;padding:11px 18px;font-size:14px;color:var(--ink-2);font-weight:500;cursor:pointer;transition:background 0.15s;border:none}
+.profile-item:hover{background:var(--primary-050);color:var(--primary)}
+.profile-item.profile-logout{color:#dc2626}
+.profile-item.profile-logout:hover{background:#fde4e4}
+.profile-footer{padding:10px 18px;border-top:1px solid var(--line-2);font-size:11.5px;color:var(--muted)}
+.profile-last-login{font-weight:500;margin-bottom:2px}
+.profile-last-login-time{font-weight:400}
+
 /* footer */
 .app-footer{display:flex;justify-content:space-between;align-items:center;background:#fff;border-top:1px solid var(--line);padding:12px 26px;font-size:12px;color:var(--muted)}
 .foot-social{display:flex;gap:16px;font-size:17px;color:var(--primary);font-weight:700}

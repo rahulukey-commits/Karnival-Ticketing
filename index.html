@@ -37,12 +37,6 @@
       </div>
     </div>
     <div class="topbar-right">
-      <div class="status-indicator-wrap">
-        <button class="status-indicator" id="statusIndicatorBtn" title="Click to update availability status">
-          <span class="status-dot" id="statusDot"></span>
-          <span class="status-label" id="statusLabel">Available</span>
-        </button>
-      </div>
       <div class="brand-wrap">
         <button class="brand-switch" id="brandSwitch">
           <span id="brandName">Athlete's Co AG</span>
@@ -50,7 +44,34 @@
         </button>
         <div class="brand-menu" id="brandMenu" hidden></div>
       </div>
-      <div class="avatar avatar-me">RU</div>
+      <div class="avatar-wrap">
+        <button class="avatar avatar-me" id="avatarBtn" title="Profile menu">
+          <span class="avatar-text">RU</span>
+          <span class="status-dot" id="statusDot"></span>
+        </button>
+        <div class="profile-dropdown" id="profileDropdown" hidden>
+          <div class="profile-greeting">Hello, <span id="userName">Rahul Ukey</span></div>
+          <div class="profile-status-section">
+            <div class="profile-status-row">
+              <span class="profile-status-label">Status:</span>
+              <button class="profile-status-btn" id="profileStatusBtn">
+                <span id="profileStatusText">Available</span>
+                <span class="profile-status-arrow">→</span>
+              </button>
+            </div>
+            <div class="profile-unavailable-info" id="profileUnavailableInfo"></div>
+          </div>
+          <hr class="profile-divider">
+          <a href="#" class="profile-item">Invite Brand</a>
+          <a href="#" class="profile-item">Integration</a>
+          <a href="#" class="profile-item">Change Password</a>
+          <a href="#" class="profile-item profile-logout">Log out</a>
+          <div class="profile-footer">
+            <div class="profile-last-login">Last login:</div>
+            <div class="profile-last-login-time" id="lastLoginTime">Jul 17, 2026, 12:15:21 PM</div>
+          </div>
+        </div>
+      </div>
     </div>
   </header>
 

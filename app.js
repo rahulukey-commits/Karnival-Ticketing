@@ -23,6 +23,21 @@ const slaBadge = t => { if(!t.escalation_info && !t.is_overdue) return '';
 const initials = n => (n||'?').trim().split(/\s+/).map(x=>x[0]).slice(0,2).join('').toUpperCase();
 const agentName = e => (AGENTS.find(a=>a.email===e)||{}).name || e || '—';
 const CURRENT_USER = {email:'rahul.ukey@karnival.com', name:'Rahul Ukey'};   // logged-in agent (RU)
+const getAgentStatusDotClass = email => {
+  const status = StatusService.getAgentStatus(email);
+  if(status.status === 'not_available') {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const fromDate = new Date(status.fromDate);
+    const tillDate = new Date(status.tillDate);
+    if(today >= fromDate && today <= tillDate) return 'unavailable';
+  }
+  return '';
+};
+const getAgentEmailFromName = name => {
+  const agent = AGENTS.find(a => a.name === name);
+  return agent ? agent.email : '';
+};
 
 function toast(title,msg,kind='ok'){
   const ico = kind==='ok'?'✅':kind==='warn'?'⚠️':'ℹ️';
@@ -35,7 +50,8 @@ function toast(title,msg,kind='ok'){
 function updateStatusIndicator(){
   const status = StatusService.getCurrentUserStatus();
   const dot = $('#statusDot');
-  const label = $('#statusLabel');
+  const profileStatusText = $('#profileStatusText');
+  const profileUnavailableInfo = $('#profileUnavailableInfo');
 
   // Check if unavailability is currently active (today is within the date range)
   let isCurrentlyUnavailable = false;
@@ -50,16 +66,27 @@ function updateStatusIndicator(){
   if(dot){
     dot.className = `status-dot ${isCurrentlyUnavailable ? 'unavailable' : 'available'}`;
   }
-  if(label){
-    if(isCurrentlyUnavailable){
-      const formatted = StatusService.formatDateRange(status.fromDate, status.tillDate);
-      label.textContent = formatted;
-    } else if(status.status === 'not_available' && status.fromDate && status.tillDate) {
-      // Show upcoming unavailability
-      const formatted = StatusService.formatDateRange(status.fromDate, status.tillDate);
-      label.textContent = `Unavailable: ${formatted}`;
+
+  // Update profile dropdown — status button shows only the status word
+  if(profileStatusText){
+    if(status.status === 'not_available') {
+      profileStatusText.textContent = 'Unavailable';
     } else {
-      label.textContent = 'Available';
+      profileStatusText.textContent = 'Available';
+    }
+  }
+
+  // Update unavailable info section — shows date range if applicable
+  if(profileUnavailableInfo){
+    if(status.status === 'not_available' && status.fromDate && status.tillDate) {
+      const formatted = StatusService.formatDateRange(status.fromDate, status.tillDate);
+      if(isCurrentlyUnavailable){
+        profileUnavailableInfo.textContent = `Unavailable: ${formatted}`;
+      } else {
+        profileUnavailableInfo.textContent = `Unavailable period: ${formatted}`;
+      }
+    } else {
+      profileUnavailableInfo.textContent = '';
     }
   }
 }
@@ -826,7 +853,7 @@ function wireDetail(t){
   if($('#dvTagSelect')) $('#dvTagSelect').onchange=e=>{const v=e.target.value;if(v){t.tags=t.tags||[];if(!t.tags.includes(v)){t.tags.push(v);paintListKeepScroll();}}};
   $$('#dvTags [data-rmt]').forEach(b=>b.onclick=()=>{t.tags=t.tags.filter(x=>x!==b.dataset.rmt);paintListKeepScroll();});
   const collab=[],groups=[];
-  $('#dvCollab').onchange=e=>{if(e.target.value&&!collab.includes(e.target.value)){collab.push(e.target.value);$('#collabChips').innerHTML=collab.map(c=>`<span class="sel-chip">${esc(agentName(c))}</span>`).join('');}e.target.value='';};
+  $('#dvCollab').onchange=e=>{if(e.target.value&&!collab.includes(e.target.value)){collab.push(e.target.value);$('#collabChips').innerHTML=collab.map(c=>`<span class="sel-chip"><span style="display:inline-flex;align-items:center;gap:6px"><span class="avatar" style="position:relative;width:24px;height:24px;font-size:10px;font-weight:700">${initials(agentName(c))}<span class="status-dot ${getAgentStatusDotClass(c)}" style="width:8px;height:8px;bottom:-1px;right:-1px;border-width:1px"></span></span>${esc(agentName(c))}</span></span>`).join('');}e.target.value='';};
   $('#dvGroup').onchange=e=>{if(e.target.value&&!groups.includes(e.target.value)){groups.push(e.target.value);$('#groupChips').innerHTML=groups.map(g=>`<span class="sel-chip">${esc(g)}</span>`).join('');}e.target.value='';};
   $('#dvAddFile').onclick=()=>$('#dvFileInput').click();
   $('#dvFileInput').onchange=e=>{[...e.target.files].forEach(f=>{t.attachments=t.attachments||[];t.attachments.push({attachment_id:'att_'+Date.now(),filename:f.name,size_bytes:f.size,mime_type:f.type||'application/octet-stream',uploaded_by:'rahul.ukey@karnival.com',uploaded_at:new Date()});});paintListKeepScroll();toast('Attachment added');};
@@ -948,7 +975,7 @@ function paintTab(t){
     b.innerHTML=`<div style="font-weight:700;margin-bottom:16px">Comments &amp; Activity</div>
       <div id="commentList">${(t.comments||[]).map(commentHTML).join('')}</div>
       <div class="comment-box">
-        <div class="row" style="gap:10px;margin-bottom:12px"><div class="avatar" style="width:34px;height:34px;background:#ece7f6;color:var(--primary)">R</div>
+        <div class="row" style="gap:10px;margin-bottom:12px"><div class="avatar" style="width:34px;height:34px;background:#ece7f6;color:var(--primary);position:relative">R<span class="status-dot ${getAgentStatusDotClass(CURRENT_USER.email)}"></span></div>
           <select class="select" id="cMode" style="width:210px;background:#fff">
             <option value="internal">Internal comment</option><option value="public">Public reply</option></select></div>
         ${richText('newComment','',4000)}
@@ -968,7 +995,7 @@ function paintTab(t){
   } else {
     b.innerHTML=`<div style="font-weight:700;margin-bottom:16px">Change History</div>
       ${historyEntries(t).map(h=>`<div class="hist-item">
-        <div class="avatar" style="width:34px;height:34px;background:#eef0f5;color:#5b6472">${initials(h.actor)}</div>
+        <div class="avatar" style="width:34px;height:34px;background:#eef0f5;color:#5b6472;position:relative">${initials(h.actor)}<span class="status-dot ${getAgentStatusDotClass(getAgentEmailFromName(h.actor))}"></span></div>
         <div style="flex:1"><div class="row" style="justify-content:space-between"><div>
           <div style="font-weight:600">${esc(h.actor)}</div><div class="c-time">${fmtDateAbs(h.at)}</div></div>
           ${h.badge?`<span class="hist-badge">${esc(h.badge)}</span>`:''}</div>
@@ -991,7 +1018,7 @@ function historyEntries(t){
   return items.sort((a,b)=>b.at-a.at);
 }
 function pj2(t){return PROJECTS.find(p=>p.project_id===t.project_id)||PROJECTS[0];}
-function commentHTML(c){return `<div class="comment"><div class="avatar">${initials(c.author)}</div>
+function commentHTML(c){return `<div class="comment"><div class="avatar" style="position:relative">${initials(c.author)}<span class="status-dot ${getAgentStatusDotClass(c.author)}"></span></div>
   <div style="flex:1"><div class="c-head"><span class="c-author">${esc(c.author)}</span><span class="c-time">${fmtDateAbs(c.at)}</span></div>
   <div class="c-body">${renderMentions(c.text)}</div></div></div>`;}
 
@@ -1222,7 +1249,7 @@ function renderAgents(){
 function paintAgents(){
   const rows=[...AGENT_STATS].sort((a,b)=>{const k=agentSort.key;const av=a[k],bv=b[k];return (typeof av==='string'?av.localeCompare(bv):av-bv)*agentSort.dir;});
   $('#agentBody').innerHTML=rows.map(a=>`<tr>
-    <td><div class="agent-cell"><div class="avatar">${initials(a.name)}</div><div><div style="font-weight:600">${esc(a.name)}</div><div class="page-sub" style="margin:0">${esc(a.email)}</div></div></div></td>
+    <td><div class="agent-cell"><div class="avatar" style="position:relative">${initials(a.name)}<span class="status-dot ${getAgentStatusDotClass(a.email)}"></span></div><div><div style="font-weight:600">${esc(a.name)}</div><div class="page-sub" style="margin:0">${esc(a.email)}</div></div></div></td>
     <td><b>${a.volume}</b></td>
     <td><div class="bar-cell"><div class="bar-track"><div class="bar-fill" style="width:${a.sla}%;background:${a.sla>=90?'#22c55e':a.sla>=80?'#fb923c':'#ef4444'}"></div></div><span style="font-weight:600">${a.sla}%</span></div></td>
     <td>${a.avgResp}</td>
@@ -1413,6 +1440,33 @@ $$('[data-route]').forEach(n=>{if(n.classList.contains('nav-item')&&!n.classList
 window.go=go;
 window.router=router;
 if(typeof M!=='undefined' && M.bootShell) M.bootShell();
+
+/* ============================================================ PROFILE DROPDOWN INIT */
+const avatarBtn = $('#avatarBtn');
+const profileDropdown = $('#profileDropdown');
+const profileStatusBtn = $('#profileStatusBtn');
+
+if(avatarBtn && profileDropdown) {
+  avatarBtn.onclick = (e) => {
+    e.stopPropagation();
+    profileDropdown.hidden = profileDropdown.hidden ? false : true;
+  };
+
+  document.onclick = (e) => {
+    // Don't close dropdown if overlay/modal is open
+    const hasOverlay = document.querySelector('.status-modal-overlay');
+    if(hasOverlay) return;
+
+    if(!avatarBtn.contains(e.target) && !profileDropdown.contains(e.target)) {
+      profileDropdown.hidden = true;
+    }
+  };
+
+  profileStatusBtn.onclick = (e) => {
+    e.stopPropagation();
+    openStatusPicker();
+  };
+}
 
 /* ============================================================ STATUS INDICATOR INIT */
 updateStatusIndicator();
