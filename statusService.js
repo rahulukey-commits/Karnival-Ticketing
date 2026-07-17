@@ -26,8 +26,13 @@ const StatusService = {
         return false;
       }
 
-      const fromDateObj = new Date(fromDate);
-      const tillDateObj = new Date(tillDate);
+      // Parse dates in local timezone (not UTC)
+      const [fromY, fromM, fromD] = fromDate.split('-');
+      const fromDateObj = new Date(fromY, fromM - 1, fromD, 0, 0, 0, 0);
+
+      const [tillY, tillM, tillD] = tillDate.split('-');
+      const tillDateObj = new Date(tillY, tillM - 1, tillD, 0, 0, 0, 0);
+
       const today = new Date();
       today.setHours(0, 0, 0, 0);
 
@@ -71,7 +76,8 @@ const StatusService = {
 
     // Check if till date has passed
     if (agent.tillDate) {
-      const tillDateObj = new Date(agent.tillDate);
+      const [tillY, tillM, tillD] = agent.tillDate.split('-');
+      const tillDateObj = new Date(tillY, tillM - 1, tillD, 0, 0, 0, 0);
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       if (tillDateObj <= today) {
@@ -124,7 +130,8 @@ const StatusService = {
 
           // Auto-revert if till date has passed
           if (agent.status === 'not_available' && agent.tillDate) {
-            const tillDateObj = new Date(agent.tillDate);
+            const [tillY, tillM, tillD] = agent.tillDate.split('-');
+            const tillDateObj = new Date(tillY, tillM - 1, tillD, 0, 0, 0, 0);
             const today = new Date();
             today.setHours(0, 0, 0, 0);
             if (tillDateObj <= today) {

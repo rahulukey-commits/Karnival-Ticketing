@@ -28,8 +28,10 @@ const getAgentStatusDotClass = email => {
   if(status.status === 'not_available') {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const fromDate = new Date(status.fromDate);
-    const tillDate = new Date(status.tillDate);
+    const [fromY, fromM, fromD] = status.fromDate.split('-');
+    const fromDate = new Date(fromY, fromM - 1, fromD, 0, 0, 0, 0);
+    const [tillY, tillM, tillD] = status.tillDate.split('-');
+    const tillDate = new Date(tillY, tillM - 1, tillD, 0, 0, 0, 0);
     if(today >= fromDate && today <= tillDate) return 'unavailable';
   }
   return '';
@@ -58,8 +60,10 @@ function updateStatusIndicator(){
   if(status.status === 'not_available' && status.fromDate && status.tillDate) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const fromDateObj = new Date(status.fromDate);
-    const tillDateObj = new Date(status.tillDate);
+    const [fromY, fromM, fromD] = status.fromDate.split('-');
+    const fromDateObj = new Date(fromY, fromM - 1, fromD, 0, 0, 0, 0);
+    const [tillY, tillM, tillD] = status.tillDate.split('-');
+    const tillDateObj = new Date(tillY, tillM - 1, tillD, 0, 0, 0, 0);
     isCurrentlyUnavailable = today >= fromDateObj && today <= tillDateObj;
   }
 
