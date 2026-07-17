@@ -811,6 +811,7 @@ function ticketDetailHTML(t){
       <div class="panel"><div class="kv-l">Customer</div>${t.customer_info?`<div class="cust-line" style="margin-top:8px"><div class="avatar">${initials(t.customer_info.name)}</div>
         <div><div class="c-name">${esc(maskName(t,t.customer_info.name))}</div><div class="c-sub">${esc(maskPhone(t,t.customer_info.phone))}</div><div class="c-sub">${esc(maskEmail(t,t.customer_info.email))}</div></div></div>`:'<div class="page-sub">No customer linked</div>'}</div>
       <div class="panel"><div class="kv-l">Assigned To</div>
+        ${t.assigned_to?`<div style="display:flex;align-items:center;gap:8px;margin-top:8px;margin-bottom:8px"><div class="avatar" style="width:32px;height:32px;position:relative;flex-shrink:0">${initials(agentName(t.assigned_to))}<span class="status-dot" style="position:absolute;top:-2px;right:-2px;width:12px;height:12px;border-radius:50%;border:0.5px solid rgba(255,255,255,0.6);background:${getAgentStatusDotClass(t.assigned_to)==='unavailable'?'#9ca3af':'#10b981'};display:block;animation:none;box-shadow:none"></span></div><div style="flex:1"><div style="font-weight:600;font-size:13px">${esc(agentName(t.assigned_to))}</div></div></div>`:''}
         <select class="select" id="dvAssignee" style="background:#fff;margin-top:8px">${getAssigneeOptionsHTML(t.assigned_to)}</select>
         ${t.assigned_to===CURRENT_USER.email
           ? `<button class="btn btn-light btn-sm" id="dvAssignMe" style="margin-top:8px" disabled>✓ Assigned to you</button>`
@@ -999,9 +1000,9 @@ function paintTab(t){
   } else {
     b.innerHTML=`<div style="font-weight:700;margin-bottom:16px">Change History</div>
       ${historyEntries(t).map(h=>`<div class="hist-item">
-        <div class="avatar" style="width:34px;height:34px;background:#eef0f5;color:#5b6472;position:relative">${initials(h.actor)}<span class="status-dot ${getAgentStatusDotClass(getAgentEmailFromName(h.actor))}"></span></div>
+        <div class="avatar" style="width:34px;height:34px;background:#eef0f5;color:#5b6472;position:relative">${initials(h.actorName)}<span class="status-dot ${getAgentStatusDotClass(h.actor)}"></span></div>
         <div style="flex:1"><div class="row" style="justify-content:space-between"><div>
-          <div style="font-weight:600">${esc(h.actor)}</div><div class="c-time">${fmtDateAbs(h.at)}</div></div>
+          <div style="font-weight:600">${esc(h.actorName)}</div><div class="c-time">${fmtDateAbs(h.at)}</div></div>
           ${h.badge?`<span class="hist-badge">${esc(h.badge)}</span>`:''}</div>
           <div class="c-body" style="margin-top:6px">${h.html}</div></div></div>`).join('')||'<div class="page-sub">No history.</div>'}`;
   }
@@ -1009,20 +1010,20 @@ function paintTab(t){
 // build a chronological change-history feed (comments + field changes + creation)
 function historyEntries(t){
   const items=[];
-  (t.comments||[]).forEach(c=>items.push({at:c.at, actor:c.email||c.author, badge:c.internal?'Internal comment':'Public reply', html:`Comment: ${renderMentions(c.text)}`}));
+  (t.comments||[]).forEach(c=>items.push({at:c.at, actor:c.email||c.author, actorName:c.author, badge:c.internal?'Internal comment':'Public reply', html:`Comment: ${renderMentions(c.text)}`}));
   const pill=v=>`<span class="hist-pill">${esc(v)}</span>`;
   (t.history_audit||[]).forEach(h=>{ if(h.field==='comment') return;
     if(h.field==='resolution'||h.field==='closure'){   // resolve/close: show reason, category + the note
-      items.push({at:h.at, actor:agentName(h.by)||h.by, badge: h.field==='resolution'?'Resolved':'Closed',
+      items.push({at:h.at, actor:h.by, actorName:agentName(h.by)||h.by, badge: h.field==='resolution'?'Resolved':'Closed',
         html:`<b>Reason:</b> ${esc(h.reason)} &nbsp;·&nbsp; <b>Category:</b> ${esc(h.category)}${h.note?`<div class="c-body" style="margin-top:6px">${esc(h.note)}</div>`:''}`});
       return; }
     const label = h.field==='assigned_to'?'Assigned':h.field==='group_assigned_to'?'Group':titleCase(h.field);
-    items.push({at:h.at, actor:agentName(h.by)||h.by, badge:'', html:`<b>${esc(label)}:</b> ${pill(h.old)} → ${pill(h.neu)}`}); });
-  items.push({at:t.created_at, actor:t.created_by, badge:'', html:`${t.created_by==='Auto Created'?'Ticket Auto-created':'Ticket created'}${t.assigned_name?`<div style="margin-top:6px"><b>Assigned:</b> ${pill('N/A')} → ${pill(t.assigned_name)}</div>`:''}`});
+    items.push({at:h.at, actor:h.by, actorName:agentName(h.by)||h.by, badge:'', html:`<b>${esc(label)}:</b> ${pill(h.old)} → ${pill(h.neu)}`}); });
+  items.push({at:t.created_at, actor:t.created_by, actorName:t.created_by, badge:'', html:`${t.created_by==='Auto Created'?'Ticket Auto-created':'Ticket created'}${t.assigned_name?`<div style="margin-top:6px"><b>Assigned:</b> ${pill('N/A')} → ${pill(t.assigned_name)}</div>`:''}`});
   return items.sort((a,b)=>b.at-a.at);
 }
 function pj2(t){return PROJECTS.find(p=>p.project_id===t.project_id)||PROJECTS[0];}
-function commentHTML(c){return `<div class="comment"><div class="avatar" style="position:relative">${initials(c.author)}<span class="status-dot ${getAgentStatusDotClass(c.author)}"></span></div>
+function commentHTML(c){return `<div class="comment"><div class="avatar" style="position:relative">${initials(c.author)}<span class="status-dot" style="position:absolute;top:-2px;right:-2px;width:12px;height:12px;border-radius:50%;border:0.5px solid rgba(255,255,255,0.6);background:${getAgentStatusDotClass(c.email)==='unavailable'?'#9ca3af':'#10b981'};display:block;animation:none;box-shadow:none"></span></div>
   <div style="flex:1"><div class="c-head"><span class="c-author">${esc(c.author)}</span><span class="c-time">${fmtDateAbs(c.at)}</span></div>
   <div class="c-body">${renderMentions(c.text)}</div></div></div>`;}
 
