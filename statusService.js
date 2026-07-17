@@ -37,8 +37,8 @@ const StatusService = {
         return false;
       }
 
-      if (tillDateObj <= fromDateObj) {
-        toast('Invalid Date', 'Till date must be after from date', 'warn');
+      if (tillDateObj < fromDateObj) {
+        toast('Invalid Date', 'Till date must be after or equal to from date', 'warn');
         return false;
       }
     }
