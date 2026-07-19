@@ -25,6 +25,7 @@ const agentName = e => (AGENTS.find(a=>a.email===e)||{}).name || e || '—';
 const CURRENT_USER = {email:'rahul.ukey@karnival.com', name:'Rahul Ukey'};   // logged-in agent (RU)
 const getAgentStatusDotClass = email => {
   const status = StatusService.getAgentStatus(email);
+  if(!status) return '';
   if(status.status === 'not_available') {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -331,33 +332,1076 @@ function renderHome(){
     </div>`;
 }
 
-/* ============================================================ TICKETING OVERVIEW */
-function renderTicketOverview(){
-  const statusData=[
-    {label:'Open',color:'#2563eb',value:KPI.OPEN},
-    {label:'In Progress',color:'#fb923c',value:KPI.INPROGRESS},
-    {label:'Under Verification',color:'#0e7490',value:KPI.VERIFY},
-    {label:'Resolved',color:'#22c55e',value:KPI.RESOLVED},
-    {label:'Closed',color:'#94a3b8',value:KPI.CLOSED},
-    {label:'Reopen',color:'#7c3aed',value:KPI.REOPEN},
-  ];
-  mount().innerHTML=`
-    <div class="page-head"><div><div class="page-title">Ticketing Overview</div>
-      <div class="page-sub">Real-time KPI rollup · last 30 days · brand timezone</div></div>
-      <button class="btn btn-primary" onclick="go('tickets')">＋ Create Ticket</button></div>
-    ${kpiGrid()}
-    <div class="an-grid">
-      <div class="an-card"><h4>Status Distribution</h4><div class="an-sub">All open + closed tickets by status</div>${Charts.donut(statusData,{center:KPI.TOTAL,centerLabel:'Tickets'})}</div>
-      <div class="an-card"><h4>Tickets Trend</h4><div class="an-sub">Created vs Resolved · daily</div>
-        ${Charts.line([{label:'Created',data:TREND.open,color:'#6a1b6e'},{label:'Resolved',data:TREND.res,color:'#22c55e'}],{x:TREND.dates})}</div>
-      <div class="an-card"><h4>Tickets by Source</h4><div class="an-sub">Origin channel breakdown</div>
-        ${Charts.hbars(SOURCE_STATS.slice(0,6).map(s=>({label:titleCase(s.source),value:s.count,color:s.auto?'#7c3aed':'#fb923c'})))}</div>
-      <div class="an-card"><h4>Recent Tickets</h4><div class="an-sub">Latest activity</div>
-        <div style="display:flex;flex-direction:column;gap:10px">${TICKETS.slice(0,5).map(t=>`
-          <div class="row" style="justify-content:space-between;border-bottom:1px solid var(--line-2);padding-bottom:8px;cursor:pointer" onclick="go('view/${t.ticket_number}')">
-            <div><span class="tcard-num">${t.ticket_number}</span> <b style="margin-left:8px">${esc(t.title)}</b><div class="page-sub">${esc(t.brand_id)} · ${fmtAgo(t.created_at)}</div></div>
-            ${statusBadge(t.ticket_status)}</div>`).join('')}</div></div>
+/* ============================================================ ANALYTICS MODULE
+   Faithful port of ticket-analytics-prototype.html — progressive drilldown
+   (Brand > Country > Zone > State > City > Store), independent filter bars,
+   Open vs Closed (chart/table + config modal), Ticket Performance Overview
+   (sortable + paginated + config modal). Namespaced with TA_ / ta- prefixes
+   so nothing here collides with the rest of app.js. */
+
+const TA_STATUSES = ["Open","In Progress","Under Verification","Closed","Resolved","Escalated","Reopened","Auto Closed"];
+const TA_DRILL_COLOR = "#4ADE80";
+
+/* Realistic dummy-data generator: every brand/level gets its own randomized
+   (but plausibly-shaped) split, so no two brands or levels end up with
+   identical or suspiciously uniform ratios. Totals always reconcile exactly
+   with their parent so hierarchy sums never drift from rounding. */
+const taRandRange = (min, max) => min + Math.random()*(max-min);
+
+function taDistributeAcross(total, weights){
+  const sum = weights.reduce((a,b)=>a+b,0);
+  const rounded = weights.map(w => Math.round((w/sum)*total));
+  let diff = total - rounded.reduce((a,b)=>a+b,0);
+  if (diff !== 0){
+    let idx = rounded.indexOf(Math.max(...rounded));
+    if (idx < 0) idx = 0;
+    rounded[idx] = Math.max(0, rounded[idx]+diff);
+  }
+  return rounded;
+}
+
+// Baseline shape of a realistic ticket-status mix (sums to 1); jittered per brand so
+// no two brands land on identical proportions.
+const TA_STATUS_BASE_WEIGHTS = [0.20,0.12,0.07,0.28,0.22,0.04,0.04,0.03]; // aligned to TA_STATUSES order
+function taGenerateStatusDist(total){
+  const jittered = TA_STATUS_BASE_WEIGHTS.map(w => w * taRandRange(0.7, 1.3));
+  return taDistributeAcross(total, jittered);
+}
+
+function taRandWeights(n){
+  // descending-ish so the first name tends to carry more volume, with enough
+  // per-call jitter that the ratio differs brand to brand and level to level.
+  return Array.from({length:n}, (_,i) => (n-i) * taRandRange(0.55, 1.45));
+}
+
+function taSplitDist(dist, names){
+  const n = names.length;
+  const weights = taRandWeights(n);
+  const perStatus = dist.map(v => taDistributeAcross(v, weights));
+  return names.map((name, idx) => ({ name, dist: perStatus.map(arr => arr[idx]) }));
+}
+
+const TA_CITY_NAMES = ["Riyadh","Jeddah","Dubai","Abu Dhabi","Doha","Manama"];
+const TA_STORE_SUFFIXES = ["Mall Branch","City Centre","Flagship Store","Outlet"];
+function taBuildBrand(name, total){
+  return {
+    name, dist: total,
+    chain: [
+      {level:"Country", items: taSplitDist(total, ["SA","AE"])},
+      {level:"Zone", items: taSplitDist(total, ["Central Zone","Eastern Zone"])},
+      {level:"State", items: taSplitDist(total, ["Riyadh Province","Makkah Province"])},
+      {level:"City", items: taSplitDist(total, [TA_CITY_NAMES[0], TA_CITY_NAMES[1], TA_CITY_NAMES[2]])},
+      {level:"Store", items: taSplitDist(total, [name+" - "+TA_STORE_SUFFIXES[0], name+" - "+TA_STORE_SUFFIXES[1], name+" - "+TA_STORE_SUFFIXES[2]])}
+    ]
+  };
+}
+
+const TA_BRAND_NAMES = ["RB","Skechers","LC Waikiki","BBZ","NYSAA","Aldo","Charles and Keith","Nine West",
+  "Tommy Hilfiger","Steve Madden","Call It Spring","Bath and Body Works","Victoria's Secret","GAP","Old Navy",
+  "Mothercare","Early Learning Centre","American Eagle","Aeropostale","Foot Locker","Toys R Us","Babyshop",
+  "Shoe Mart","Splash","Lifestyle"];
+
+// Long-tail brand volumes: a gentle rank-based decay plus per-brand jitter so
+// totals vary organically instead of everyone being a multiple of one scale factor.
+const TA_BRANDS = TA_BRAND_NAMES.map((name, i)=>{
+  const rankFactor = Math.pow(0.9, i);
+  const total = Math.max(60, Math.round(1800 * rankFactor * taRandRange(0.55, 1.35)));
+  return taBuildBrand(name, taGenerateStatusDist(total));
+});
+
+const TA_COUNTRIES = ["SA","AE","KW","QA","OM","BH"];
+const TA_PROJECTS = [
+  {name:"Ramadan Campaign", brand:"RB"},
+  {name:"CES Detractors", brand:"RB"},
+  {name:"CES Detractors", brand:"Skechers"},
+  {name:"Store Launch", brand:"LC Waikiki"},
+  {name:"Loyalty Feedback", brand:"BBZ"},
+  {name:"Support Ticket Flow", brand:"NYSAA"},
+  {name:"Ramadan Campaign", brand:"Aldo"},
+  {name:"Checkout Experience", brand:"Nine West"},
+  {name:"Onboarding Survey", brand:"Tommy Hilfiger"},
+];
+const taProjectKey = (brand, name) => brand+"::"+name;
+
+// Give every brand's tracked projects a stable slice of its ticket volume; whatever
+// isn't claimed by a project stays "unassigned" and drops out when a project filter
+// is active — this is what makes the Project filter actually change the counts.
+TA_BRANDS.forEach(brand=>{
+  brand.projectDist = {};
+  const projs = TA_PROJECTS.filter(p=>p.brand===brand.name);
+  if(!projs.length) return;
+  const assignedShare = taRandRange(0.45, 0.8);
+  const assignedTotal = brand.dist.map(v=>Math.round(v*assignedShare));
+  taSplitDist(assignedTotal, projs.map(p=>p.name)).forEach(s=>{ brand.projectDist[s.name] = s.dist; });
+});
+
+function taProjectFilteredDist(brand, selectedProjectKeys){
+  const prefix = brand.name+"::";
+  const keys = selectedProjectKeys.filter(k=>k.startsWith(prefix));
+  const dist = new Array(TA_STATUSES.length).fill(0);
+  keys.forEach(k=>{
+    const pd = brand.projectDist[k.slice(prefix.length)];
+    if(pd) pd.forEach((v,i)=> dist[i]+=v);
+  });
+  return dist;
+}
+
+const TA_DATE_OPTIONS = ["Last 7 days","Last 14 days","Last Month","Last 3 Months","Custom"];
+// The baked-in dist arrays represent "Last 7 days" — every other preset (and Custom
+// range) scales those numbers by how many days it actually spans, so switching the
+// date filter visibly changes every count instead of being decorative.
+const TA_DATE_DAY_COUNTS = { "Last 7 days":7, "Last 14 days":14, "Last Month":30, "Last 3 Months":90 };
+function taDateMultiplier(dateValue, customFrom, customTo){
+  if (dateValue === "Custom"){
+    if (!customFrom || !customTo) return 1;
+    const days = Math.max(1, Math.round((customTo - customFrom)/86400000) + 1);
+    return days/7;
+  }
+  return (TA_DATE_DAY_COUNTS[dateValue] || 7) / 7;
+}
+// Human-readable label for whichever preset (or custom range) a filter is currently on.
+function taDateLabel(state, valueKey){
+  if (state[valueKey]==="Custom" && state.customFrom && state.customTo){
+    return taFmtCalDate(state.customFrom)+' – '+taFmtCalDate(state.customTo);
+  }
+  return state[valueKey];
+}
+
+/* ---------------- state (persists across navigations, like the prototype's top-level lets) ---------------- */
+const taCalDefaults = { customFrom:null, customTo:null, calOpen:false, calAnchor:null, calHoverDate:null, calViewMonth:null };
+let taState = { scopeMode:"Overall", selectedBrands:[], selectedCountries:[], selectedProjects:[], dateRange:"Last 7 days", openDropdown:null, selectedStatus:null, brandLevelShown:5, ...structuredClone(taCalDefaults) };
+let taOcState = { scope:"Overall", brands:[], projects:[], date:"Last 7 days", openDropdown:null, view:"chart", openBucket:["Open"], closedBucket:["Closed"], levelShown:5, ...structuredClone(taCalDefaults) };
+let taPerfState = { scope:"Overall", brands:[], projects:[], date:"Last 7 days", openDropdown:null,
+  openBucket:["Open"], closedBucket:["Closed"], fcrBucket:["Resolved"], sortCol:"openRate", sortDir:"desc", page:1, perPage:10, ...structuredClone(taCalDefaults) };
+
+function taSumDist(entities){
+  const totals = new Array(TA_STATUSES.length).fill(0);
+  entities.forEach(e => e.dist.forEach((v,i)=> totals[i]+=v));
+  return totals;
+}
+function taInScopeBrands(){
+  return taState.selectedBrands.length ? TA_BRANDS.filter(b=>taState.selectedBrands.includes(b.name)) : TA_BRANDS;
+}
+
+// Applies Country scope, the Project filter, and the date multiplier — in that order —
+// to a single brand's raw dist, so every section reads one consistent, filtered number.
+function taEffectiveBrandDist(brand){
+  let dist = brand.dist;
+  if (taState.scopeMode==="Country" && taState.selectedCountries.length){
+    const countryLevel = brand.chain.find(c=>c.level==="Country");
+    const matching = countryLevel.items.filter(it=>taState.selectedCountries.includes(it.name));
+    const countryDist = new Array(TA_STATUSES.length).fill(0);
+    matching.forEach(it=> it.dist.forEach((v,i)=> countryDist[i]+=v));
+    dist = countryDist;
+  }
+  if (taState.selectedProjects.length){
+    const projDist = taProjectFilteredDist(brand, taState.selectedProjects);
+    dist = (dist===brand.dist) ? projDist
+      : dist.map((v,i)=> brand.dist[i] ? Math.round(v * (projDist[i]/brand.dist[i])) : 0);
+  }
+  const mult = taDateMultiplier(taState.dateRange, taState.customFrom, taState.customTo);
+  return dist.map(v=>Math.max(0, Math.round(v*mult)));
+}
+function taCurrentEntities(){
+  return taInScopeBrands().map(b=>({ name:b.name, dist:taEffectiveBrandDist(b), chain:b.chain }));
+}
+
+// Shared by the Open vs Closed and Performance sections (Overall/Brand scope only —
+// no Country there), applying the Project filter + date multiplier to a brand's dist.
+function taScopedDist(brand, selectedProjectKeys, dateValue, customFrom, customTo){
+  const dist = selectedProjectKeys.length ? taProjectFilteredDist(brand, selectedProjectKeys) : brand.dist;
+  const mult = taDateMultiplier(dateValue, customFrom, customTo);
+  return dist.map(v=>Math.max(0, Math.round(v*mult)));
+}
+
+/* ---------------- main filter bar ---------------- */
+function renderTAFilterBar(){
+  const bar = document.getElementById("taFilterBar");
+  if(!bar) return;
+  bar.innerHTML = "";
+
+  const seg = document.createElement("div");
+  seg.className = "ta-seg";
+  ["Overall","Brand","Country"].forEach(m=>{
+    const b = document.createElement("button");
+    b.textContent = m;
+    if (m===taState.scopeMode) b.classList.add("active");
+    b.onclick = ()=>{ taState.scopeMode=m; if(m==="Overall"){taState.selectedBrands=[];taState.selectedCountries=[];} if(m==="Brand"){taState.selectedCountries=[];} taState.openDropdown=null; renderTAAll(); };
+    seg.appendChild(b);
+  });
+  bar.appendChild(seg);
+
+  if (taState.scopeMode==="Brand" || taState.scopeMode==="Country"){
+    bar.appendChild(makeTAMultiDropdown("brand","Select brands", TA_BRANDS.map(b=>b.name), taState.selectedBrands, (vals)=>{taState.selectedBrands=vals; renderTAAll();}));
+  }
+  if (taState.scopeMode==="Country"){
+    bar.appendChild(makeTAMultiDropdown("country","Select countries", TA_COUNTRIES, taState.selectedCountries, (vals)=>{taState.selectedCountries=vals; renderTAAll();}));
+  }
+
+  const projOptions = TA_PROJECTS
+    .filter(p => taState.selectedBrands.length===0 || taState.selectedBrands.includes(p.brand))
+    .map(p => ({ value: taProjectKey(p.brand,p.name), label: (taState.selectedBrands.length===1 ? p.name : p.brand+" - "+p.name) }));
+  bar.appendChild(makeTAMultiDropdown("project","Select projects", projOptions, taState.selectedProjects, (vals)=>{taState.selectedProjects=vals; renderTAAll();}));
+
+  bar.appendChild(renderTADateControl({ state:taState, valueKey:"dateRange", rerender:renderTAAll, rerenderLight:renderTAFilterBar }));
+}
+
+function taNormalizeTAOptions(options){
+  return options.map(o => typeof o === "string" ? {value:o, label:o} : o);
+}
+
+function makeTAMultiDropdown(key, placeholder, rawOptions, selectedArr, onChange){
+  const options = taNormalizeTAOptions(rawOptions);
+  const wrap = document.createElement("div");
+  wrap.className = "ta-dd";
+  const btn = document.createElement("button");
+  btn.className = "ta-dd-btn";
+  const selectedLabels = selectedArr.map(v => (options.find(o=>o.value===v)||{label:v}).label);
+  const label = selectedArr.length===0 ? placeholder : (selectedArr.length<=2 ? selectedLabels.join(", ") : selectedArr.length+" selected");
+  btn.innerHTML = '<span class="'+(selectedArr.length===0?'ta-muted':'')+'">'+esc(label)+'</span><span>▾</span>';
+  btn.onclick = (e)=>{ e.stopPropagation(); taState.openDropdown = (taState.openDropdown===key ? null : key); renderTAFilterBar(); };
+  wrap.appendChild(btn);
+
+  if (taState.openDropdown===key){
+    const panel = document.createElement("div");
+    panel.className = "ta-dd-panel";
+    panel.onclick = (e)=> e.stopPropagation();
+    const search = document.createElement("input");
+    search.className = "ta-dd-search"; search.placeholder = "Search";
+    panel.appendChild(search);
+
+    const actionsRow = document.createElement("div");
+    actionsRow.style.cssText = "display:flex; justify-content:space-between; align-items:center;";
+    const selAll = document.createElement("div");
+    selAll.className = "ta-dd-selectall"; selAll.textContent = "Select all";
+    selAll.onclick = ()=> onChange(options.map(o=>o.value));
+    actionsRow.appendChild(selAll);
+    if (selectedArr.length>0){
+      const clearAll = document.createElement("div");
+      clearAll.className = "ta-dd-selectall"; clearAll.textContent = "Clear all";
+      clearAll.onclick = ()=> onChange([]);
+      actionsRow.appendChild(clearAll);
+    }
+    panel.appendChild(actionsRow);
+
+    const list = document.createElement("div");
+    list.className = "ta-dd-list";
+    function renderList(filterText){
+      list.innerHTML = "";
+      options.filter(o=>o.label.toLowerCase().includes(filterText.toLowerCase())).forEach(o=>{
+        const item = document.createElement("div");
+        item.className = "ta-dd-item";
+        const checked = selectedArr.includes(o.value);
+        item.innerHTML = '<input type="checkbox" '+(checked?'checked':'')+'><span>'+esc(o.label)+'</span>';
+        item.onclick = ()=>{ onChange(checked ? selectedArr.filter(x=>x!==o.value) : selectedArr.concat([o.value])); };
+        list.appendChild(item);
+      });
+    }
+    renderList("");
+    search.oninput = ()=>renderList(search.value);
+    panel.appendChild(list);
+    wrap.appendChild(panel);
+  }
+  return wrap;
+}
+
+/* ---------------- custom date-range calendar (hover trail, click start then end) ---------------- */
+function taFmtCalDate(d){ return d ? `${MON[d.getMonth()]} ${d.getDate()}` : ''; }
+function taSameCalDay(a,b){ return a && b && a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth() && a.getDate()===b.getDate(); }
+
+function taOpenCalendar(state){
+  state.calOpen = true;
+  state.calAnchor = null;
+  state.calHoverDate = null;
+  state.calViewMonth = state.customFrom ? new Date(state.customFrom.getFullYear(), state.customFrom.getMonth(), 1) : new Date();
+}
+function taCloseCalendar(state){
+  state.calOpen = false;
+  state.calAnchor = null;
+  state.calHoverDate = null;
+}
+
+// Renders the preset <select> plus — only when "Custom" is chosen — a trigger button
+// that opens a real calendar: click a start day, then hover trails a live preview of
+// the range up to the pointer, click the end day to lock it in.
+function renderTADateControl(cfg){
+  const state = cfg.state;
+  const wrap = document.createElement("div");
+
+  const sel = document.createElement("select");
+  sel.className = "ta-date-select";
+  TA_DATE_OPTIONS.forEach(d=>{
+    const o = document.createElement("option");
+    o.value=d; o.textContent=d; if(d===state[cfg.valueKey]) o.selected=true;
+    sel.appendChild(o);
+  });
+  sel.onchange = (e)=>{
+    state[cfg.valueKey] = e.target.value;
+    if (e.target.value==="Custom" && !(state.customFrom && state.customTo)) taOpenCalendar(state);
+    else taCloseCalendar(state);
+    cfg.rerender();
+  };
+  wrap.appendChild(sel);
+
+  if (state[cfg.valueKey] === "Custom"){
+    const ddWrap = document.createElement("div");
+    ddWrap.className = "ta-dd"; ddWrap.style.marginTop = "6px";
+    const trigger = document.createElement("button");
+    trigger.type = "button"; trigger.className = "ta-dd-btn"; trigger.style.width = "100%";
+    const hasRange = state.customFrom && state.customTo;
+    const label = hasRange ? (taFmtCalDate(state.customFrom)+' – '+taFmtCalDate(state.customTo)) : 'Select dates';
+    trigger.innerHTML = '<span class="'+(hasRange?'':'ta-muted')+'">'+esc(label)+'</span><span>📅</span>';
+    trigger.onclick = (e)=>{ e.stopPropagation(); if(state.calOpen) taCloseCalendar(state); else taOpenCalendar(state); cfg.rerender(); };
+    ddWrap.appendChild(trigger);
+    if (state.calOpen) ddWrap.appendChild(renderTACalendarPanel(state, cfg.rerenderLight||cfg.rerender, cfg.rerender));
+    wrap.appendChild(ddWrap);
+  }
+  return wrap;
+}
+
+function renderTACalendarPanel(state, rerenderLight, rerenderFull){
+  const panel = document.createElement("div");
+  panel.className = "ta-cal-panel";
+  panel.onclick = e=>e.stopPropagation();
+
+  const viewMonth = state.calViewMonth || new Date();
+  const year = viewMonth.getFullYear(), month = viewMonth.getMonth();
+
+  const header = document.createElement("div");
+  header.className = "ta-cal-header";
+  const prevBtn = document.createElement("button"); prevBtn.type="button"; prevBtn.className="ta-cal-nav"; prevBtn.textContent="‹";
+  prevBtn.onclick = ()=>{ state.calViewMonth = new Date(year, month-1, 1); rerenderLight(); };
+  const nextBtn = document.createElement("button"); nextBtn.type="button"; nextBtn.className="ta-cal-nav"; nextBtn.textContent="›";
+  nextBtn.onclick = ()=>{ state.calViewMonth = new Date(year, month+1, 1); rerenderLight(); };
+  const label = document.createElement("div"); label.className="ta-cal-label"; label.textContent = `${MON[month]} ${year}`;
+  header.appendChild(prevBtn); header.appendChild(label); header.appendChild(nextBtn);
+  panel.appendChild(header);
+
+  const grid = document.createElement("div"); grid.className="ta-cal-grid";
+  ["Su","Mo","Tu","We","Th","Fr","Sa"].forEach(d=>{
+    const dh = document.createElement("div"); dh.className="ta-cal-dow"; dh.textContent=d; grid.appendChild(dh);
+  });
+  const firstDow = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month+1, 0).getDate();
+  for(let i=0;i<firstDow;i++){ const blank=document.createElement("div"); blank.className="ta-cal-day ta-cal-blank"; grid.appendChild(blank); }
+
+  let rangeStart = state.calAnchor;
+  let rangeEnd = (state.calAnchor && state.calHoverDate) ? state.calHoverDate : null;
+  if (!state.calAnchor && state.customFrom && state.customTo){ rangeStart = state.customFrom; rangeEnd = state.customTo; }
+  if (rangeStart && rangeEnd && rangeStart > rangeEnd){ const tmp=rangeStart; rangeStart=rangeEnd; rangeEnd=tmp; }
+
+  for(let day=1; day<=daysInMonth; day++){
+    const d = new Date(year, month, day);
+    const cell = document.createElement("div");
+    cell.className = "ta-cal-day";
+    cell.textContent = day;
+    if (rangeStart && rangeEnd && d>=rangeStart && d<=rangeEnd){
+      cell.classList.add("in-range");
+      if (taSameCalDay(d, rangeStart)) cell.classList.add("range-start");
+      if (taSameCalDay(d, rangeEnd)) cell.classList.add("range-end");
+    } else if (rangeStart && !rangeEnd && taSameCalDay(d, rangeStart)){
+      cell.classList.add("range-start","range-end","in-range");
+    }
+    cell.onmouseenter = ()=>{ if (state.calAnchor && !taSameCalDay(state.calHoverDate, d)){ state.calHoverDate = d; rerenderLight(); } };
+    cell.onclick = ()=>{
+      if (!state.calAnchor){
+        state.calAnchor = d; state.calHoverDate = d;
+        rerenderLight();
+      } else {
+        let from = state.calAnchor, to = d;
+        if (from > to){ const tmp=from; from=to; to=tmp; }
+        state.customFrom = from; state.customTo = to;
+        state.calAnchor = null; state.calHoverDate = null; state.calOpen = false;
+        rerenderFull();
+      }
+    };
+    grid.appendChild(cell);
+  }
+  panel.appendChild(grid);
+
+  const footer = document.createElement("div"); footer.className="ta-cal-footer";
+  if (state.calAnchor){
+    footer.innerHTML = rangeEnd && !taSameCalDay(rangeStart,rangeEnd)
+      ? `<span>${esc(taFmtCalDate(rangeStart))} – ${esc(taFmtCalDate(rangeEnd))}</span>`
+      : `<span>${esc(taFmtCalDate(rangeStart))} → pick an end date</span>`;
+  } else if (state.customFrom && state.customTo){
+    footer.innerHTML = `<span>${esc(taFmtCalDate(state.customFrom))} – ${esc(taFmtCalDate(state.customTo))}</span><button type="button" class="ta-cal-clear" id="taCalClear">Clear</button>`;
+  } else {
+    footer.innerHTML = '<span>Click a start date, then an end date</span>';
+  }
+  panel.appendChild(footer);
+  const clearBtn = footer.querySelector("#taCalClear");
+  if (clearBtn) clearBtn.onclick = ()=>{ state.customFrom=null; state.customTo=null; state.calAnchor=null; state.calHoverDate=null; rerenderFull(); };
+
+  return panel;
+}
+
+/* ---------------- header + progressive drilldown ---------------- */
+function renderTAHeader(){
+  const card = document.getElementById("taHeaderCardBody");
+  if(!card) return;
+  const entities = taCurrentEntities();
+  const totals = taSumDist(entities);
+  const grand = totals.reduce((a,b)=>a+b,0);
+  const rows = TA_STATUSES.map((s,i)=>({name:s, count:totals[i]})).sort((a,b)=>b.count-a.count);
+  const max = Math.max(1, rows[0].count);
+  card.innerHTML = `
+    <div class="ta-total-num">${grand.toLocaleString()}</div>
+    <div class="ta-total-sub">total tickets &middot; ${esc(taDateLabel(taState,"dateRange"))}${taState.scopeMode!=="Overall" ? " &middot; scoped to "+esc(taState.scopeMode.toLowerCase()) : ""}</div>
+    ${rows.map(r=>`
+      <div class="ta-bar-row" data-status="${esc(r.name)}" title="${esc(r.name)}: ${r.count.toLocaleString()}" style="opacity:${taState.selectedStatus && taState.selectedStatus!==r.name ? '0.6':'1'};">
+        <div class="ta-lbl">${esc(r.name)}</div>
+        <div class="ta-track"><div class="ta-fill" style="width:${Math.round(r.count/max*100)}%; background:${TA_DRILL_COLOR}"></div></div>
+        <div class="ta-val">${r.count.toLocaleString()}</div>
+      </div>
+    `).join("")}
+  `;
+  card.querySelectorAll(".ta-bar-row").forEach(row=>{ row.onclick = ()=> onTAStatusClick(row.dataset.status); });
+}
+
+function taSelectRow(panel, rowEl){
+  panel.querySelectorAll(".ta-bar-row").forEach(r=>{ r.style.opacity = (r===rowEl) ? "1" : "0.6"; });
+}
+
+// Collapses everything after `panel` and clears the open/dimmed state of its rows —
+// used both to close a re-clicked row and before opening a different one.
+function taCollapseAfter(panel){
+  let sib = panel.nextSibling;
+  while(sib){ const rm=sib; sib=sib.nextSibling; rm.remove(); }
+  panel.querySelectorAll(".ta-bar-row").forEach(r=>{ r.style.opacity = "1"; r.classList.remove("ta-row-open"); });
+}
+
+// Shared click behavior for every drilldown row (Brand level + every cascade level,
+// including Store): first click expands the next level, clicking the SAME row again
+// collapses it back closed instead of re-expanding.
+function taWireDrillRow(row, panel, expandFn){
+  row.onclick = ()=>{
+    if (row.classList.contains("ta-row-open")){
+      taCollapseAfter(panel);
+      return;
+    }
+    taCollapseAfter(panel);
+    taSelectRow(panel, row);
+    row.classList.add("ta-row-open");
+    expandFn();
+  };
+}
+
+function onTAStatusClick(statusName){
+  const container = document.getElementById("taDrillArea");
+  if(!container) return;
+  if (taState.selectedStatus === statusName){
+    taState.selectedStatus = null;
+    renderTAHeader();
+    container.innerHTML = "";
+    return;
+  }
+  taState.selectedStatus = statusName;
+  renderTAHeader();
+  taState.brandLevelShown = 5;
+  const idx = TA_STATUSES.indexOf(statusName);
+  container.innerHTML = "";
+  renderTAEntityLevel(taCurrentEntities(), idx, statusName, ["Brand"], container, true);
+}
+
+function renderTAEntityLevel(entities, statusIdx, statusName, breadcrumbBase, container, isTopLevel){
+  const panel = document.createElement("div");
+  panel.className = "ta-panel";
+  const crumb = document.createElement("div");
+  crumb.className = "ta-breadcrumb";
+  crumb.innerHTML = '<span id="taCrumbReset">All statuses</span><span class="ta-sep">›</span><b>'+esc(statusName)+'</b><span class="ta-sep">›</span>'+esc(breadcrumbBase[breadcrumbBase.length-1]);
+  panel.appendChild(crumb);
+
+  const allItems = entities.map(e=>({name:e.name, count:e.dist[statusIdx], ref:e}));
+  const paginate = isTopLevel && taState.selectedBrands.length===0 && allItems.length>5;
+  const items = paginate ? allItems.slice(0, taState.brandLevelShown) : allItems;
+  const max = Math.max(1, ...allItems.map(i=>i.count));
+  if (items.length===0){
+    panel.innerHTML += '<div class="ta-empty">No data for this level yet.</div>';
+  } else {
+    items.forEach(it=>{
+      const row = document.createElement("div");
+      row.className = "ta-bar-row";
+      row.title = `${it.name}: ${it.count.toLocaleString()}`;
+      row.innerHTML = `<div class="ta-lbl">${esc(it.name)}</div><div class="ta-track"><div class="ta-fill" style="width:${Math.round(it.count/max*100)}%; background:${TA_DRILL_COLOR}"></div></div><div class="ta-val">${it.count.toLocaleString()}</div>`;
+      taWireDrillRow(row, panel, ()=>{
+        let chain = it.ref.chain;
+        if (taState.scopeMode==="Country" && taState.selectedCountries.length){
+          chain = chain.map((lvl,i)=> i===0 ? {level:lvl.level, items:lvl.items.filter(x=>taState.selectedCountries.includes(x.name))} : lvl);
+        }
+        cascadeTAChain(chain, 0, breadcrumbBase.concat([it.name]), statusIdx, statusName, container);
+      });
+      panel.appendChild(row);
+    });
+    if (paginate || taState.brandLevelShown>5){
+      const remaining = allItems.length - items.length;
+      const loadWrap = document.createElement("div");
+      loadWrap.className = "ta-load-controls";
+      let controlsHtml = "";
+      if (remaining>0){
+        controlsHtml += `<button class="ta-load-btn" id="taBrandLoadMoreBtn">Load ${Math.min(5,remaining)} more</button>
+          <button class="ta-load-link" id="taBrandShowAllBtn">Show all (${remaining} remaining)</button>`;
+      }
+      if (taState.brandLevelShown>5){
+        controlsHtml += `<button class="ta-load-link" id="taBrandViewLessBtn">View less</button>`;
+      }
+      loadWrap.innerHTML = controlsHtml;
+      panel.appendChild(loadWrap);
+      const note = document.createElement("div");
+      note.className = "ta-entries-note";
+      note.textContent = items.length+" of "+allItems.length+" brands shown";
+      panel.appendChild(note);
+      const loadMoreBtn = loadWrap.querySelector("#taBrandLoadMoreBtn");
+      if (loadMoreBtn) loadMoreBtn.onclick = ()=>{ taState.brandLevelShown += 5; panel.remove(); renderTAEntityLevel(entities, statusIdx, statusName, breadcrumbBase, container, isTopLevel); };
+      const showAllBtn = loadWrap.querySelector("#taBrandShowAllBtn");
+      if (showAllBtn) showAllBtn.onclick = ()=>{ taState.brandLevelShown = allItems.length; panel.remove(); renderTAEntityLevel(entities, statusIdx, statusName, breadcrumbBase, container, isTopLevel); };
+      const viewLessBtn = loadWrap.querySelector("#taBrandViewLessBtn");
+      if (viewLessBtn) viewLessBtn.onclick = ()=>{ taState.brandLevelShown = 5; panel.remove(); renderTAEntityLevel(entities, statusIdx, statusName, breadcrumbBase, container, isTopLevel); };
+    }
+  }
+  container.appendChild(panel);
+  panel.querySelector("#taCrumbReset")?.addEventListener("click", ()=>{ container.innerHTML=""; taState.selectedStatus=null; renderTAHeader(); });
+}
+
+function cascadeTAChain(chain, startIdx, breadcrumbNames, statusIdx, statusName, container){
+  let idx = startIdx;
+  while (idx < chain.length){
+    const levelDef = chain[idx];
+    const panel = document.createElement("div");
+    panel.className = "ta-panel";
+    const crumb = document.createElement("div");
+    crumb.className = "ta-breadcrumb";
+    crumb.innerHTML = '<span class="taCrumbHome">All statuses</span><span class="ta-sep">›</span>'+
+      breadcrumbNames.map(n=>'<span>'+esc(n)+'</span>').join('<span class="ta-sep">›</span>') +
+      '<span class="ta-sep">›</span><b>'+esc(levelDef.level)+'</b>';
+    panel.appendChild(crumb);
+
+    if (levelDef.items.length===0){
+      panel.innerHTML += '<div class="ta-empty">Looks like there is currently no data at this level.</div>';
+      container.appendChild(panel);
+      panel.querySelector(".taCrumbHome").onclick = ()=>{ container.innerHTML=""; taState.selectedStatus=null; renderTAHeader(); };
+      idx++;
+      continue;
+    }
+
+    const mult = taDateMultiplier(taState.dateRange, taState.customFrom, taState.customTo);
+    const max = Math.max(1, ...levelDef.items.map(i=>Math.round(i.dist[statusIdx]*mult)));
+    const isLastLevel = idx === chain.length-1;
+    levelDef.items.forEach(it=>{
+      const row = document.createElement("div");
+      row.className = "ta-bar-row";
+      const count = Math.round(it.dist[statusIdx]*mult);
+      row.title = `${it.name}: ${count.toLocaleString()}`;
+      row.innerHTML = `<div class="ta-lbl">${esc(it.name)}</div><div class="ta-track"><div class="ta-fill" style="width:${Math.round(count/max*100)}%; background:${TA_DRILL_COLOR}"></div></div><div class="ta-val">${count.toLocaleString()}</div>`;
+      if (isLastLevel){
+        // Store is the last level — still clickable (highlights + hover shows the count), just nothing further to expand.
+        row.onclick = ()=>{
+          const isOpen = row.classList.contains("ta-row-open");
+          panel.querySelectorAll(".ta-bar-row").forEach(r=>{ r.style.opacity = "1"; r.classList.remove("ta-row-open"); });
+          if (!isOpen){ taSelectRow(panel, row); row.classList.add("ta-row-open"); }
+        };
+      } else {
+        taWireDrillRow(row, panel, ()=> cascadeTAChain(chain, idx+1, breadcrumbNames.concat([it.name]), statusIdx, statusName, container));
+      }
+      panel.appendChild(row);
+    });
+    container.appendChild(panel);
+    panel.querySelector(".taCrumbHome").onclick = ()=>{ container.innerHTML=""; taState.selectedStatus=null; renderTAHeader(); };
+    break;
+  }
+}
+
+/* ---------------- reusable config modal ---------------- */
+function renderTAModal(cfg){
+  const root = document.getElementById("taModalRoot");
+  if(!root) return;
+  root.innerHTML = "";
+  const overlay = document.createElement("div");
+  overlay.className = "ta-modal-overlay";
+  overlay.onclick = (e)=>{ if(e.target===overlay){ root.innerHTML=""; cfg.onClose && cfg.onClose(); } };
+  const box = document.createElement("div");
+  box.className = "ta-modal-box";
+  box.onclick = (e)=> e.stopPropagation();
+  box.innerHTML = '<h3>'+esc(cfg.title)+'</h3><div class="ta-modal-sub">'+esc(cfg.subtitle)+'</div>';
+  const groupsWrap = document.createElement("div");
+  groupsWrap.className = "ta-modal-groups";
+  cfg.groups.forEach(g=>{
+    const gWrap = document.createElement("div");
+    gWrap.style.cssText = "display:flex; gap:12px;";
+    const label = document.createElement("div");
+    label.className = "ta-modal-group-label"; label.textContent = g.label;
+    gWrap.appendChild(label);
+    const checks = document.createElement("div");
+    checks.className = "ta-modal-checks";
+    g.options.forEach(opt=>{
+      const lab = document.createElement("label");
+      const checked = g.selected.includes(opt);
+      lab.innerHTML = '<input type="checkbox" '+(checked?'checked':'')+'><span>'+esc(opt)+'</span>';
+      lab.querySelector("input").onchange = (e)=>{
+        g.onChange(e.target.checked ? g.selected.concat([opt]) : g.selected.filter(x=>x!==opt));
+      };
+      checks.appendChild(lab);
+    });
+    gWrap.appendChild(checks);
+    groupsWrap.appendChild(gWrap);
+  });
+  box.appendChild(groupsWrap);
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "ta-modal-close-btn"; closeBtn.textContent = "Close";
+  closeBtn.onclick = ()=>{ root.innerHTML=""; cfg.onClose && cfg.onClose(); };
+  box.appendChild(closeBtn);
+  overlay.appendChild(box);
+  root.appendChild(overlay);
+}
+
+/* ---------------- generic dropdown for the independently-filtered sections below ---------------- */
+function makeTAMultiDropdown2(cfg){
+  const options = taNormalizeTAOptions(cfg.options);
+  const wrap = document.createElement("div");
+  wrap.className = "ta-dd";
+  const btn = document.createElement("button");
+  btn.className = "ta-dd-btn";
+  const selectedLabels = cfg.selected.map(v => (options.find(o=>o.value===v)||{label:v}).label);
+  const label = cfg.selected.length===0 ? cfg.placeholder : (cfg.selected.length<=2 ? selectedLabels.join(", ") : cfg.selected.length+" selected");
+  btn.innerHTML = '<span class="'+(cfg.selected.length===0?'ta-muted':'')+'">'+esc(label)+'</span><span>▾</span>';
+  btn.onclick = (e)=>{ e.stopPropagation(); cfg.state.openDropdown = (cfg.state.openDropdown===cfg.key ? null : cfg.key); cfg.rerender(); };
+  wrap.appendChild(btn);
+  if (cfg.state.openDropdown===cfg.key){
+    const panel = document.createElement("div");
+    panel.className = "ta-dd-panel";
+    panel.onclick = (e)=> e.stopPropagation();
+    const search = document.createElement("input");
+    search.className = "ta-dd-search"; search.placeholder = "Search";
+    panel.appendChild(search);
+    const actionsRow = document.createElement("div");
+    actionsRow.style.cssText = "display:flex; justify-content:space-between; align-items:center;";
+    const selAll = document.createElement("div");
+    selAll.className = "ta-dd-selectall"; selAll.textContent = "Select all";
+    selAll.onclick = ()=> cfg.onChange(options.map(o=>o.value));
+    actionsRow.appendChild(selAll);
+    if (cfg.selected.length>0){
+      const clearAll = document.createElement("div");
+      clearAll.className = "ta-dd-selectall"; clearAll.textContent = "Clear all";
+      clearAll.onclick = ()=> cfg.onChange([]);
+      actionsRow.appendChild(clearAll);
+    }
+    panel.appendChild(actionsRow);
+    const list = document.createElement("div");
+    list.className = "ta-dd-list";
+    function renderList(f){
+      list.innerHTML = "";
+      options.filter(o=>o.label.toLowerCase().includes(f.toLowerCase())).forEach(o=>{
+        const item = document.createElement("div");
+        item.className = "ta-dd-item";
+        const checked = cfg.selected.includes(o.value);
+        item.innerHTML = '<input type="checkbox" '+(checked?'checked':'')+'><span>'+esc(o.label)+'</span>';
+        item.onclick = ()=>{ cfg.onChange(checked ? cfg.selected.filter(x=>x!==o.value) : cfg.selected.concat([o.value])); };
+        list.appendChild(item);
+      });
+    }
+    renderList("");
+    search.oninput = ()=> renderList(search.value);
+    panel.appendChild(list);
+    wrap.appendChild(panel);
+  }
+  return wrap;
+}
+
+/* ---------------- section: Open vs Closed tickets ---------------- */
+function taOcScopedBrands(){
+  return taOcState.brands.length ? TA_BRANDS.filter(b=>taOcState.brands.includes(b.name)) : TA_BRANDS;
+}
+
+function renderTAOc(){
+  const card = document.getElementById("taOcSection");
+  if(!card) return;
+  card.innerHTML = "";
+  const head = document.createElement("div");
+  head.className = "ta-section-head";
+  head.innerHTML = '<h2>Open vs Closed Tickets</h2>';
+  const actions = document.createElement("div");
+  actions.className = "ta-section-head-actions";
+  const chartBtn = document.createElement("button");
+  chartBtn.className = "ta-icon-btn"+(taOcState.view==="chart"?" active":"");
+  chartBtn.textContent = "\u{1F4CA}"; chartBtn.title = "Chart view";
+  chartBtn.onclick = ()=>{ taOcState.view="chart"; renderTAOc(); };
+  const tableBtn = document.createElement("button");
+  tableBtn.className = "ta-icon-btn"+(taOcState.view==="table"?" active":"");
+  tableBtn.textContent = "▦"; tableBtn.title = "Table view";
+  tableBtn.onclick = ()=>{ taOcState.view="table"; renderTAOc(); };
+  const gearBtn = document.createElement("button");
+  gearBtn.className = "ta-icon-btn"; gearBtn.textContent = "⚙"; gearBtn.title = "Configure chart display";
+  gearBtn.onclick = ()=> openTAOcModal();
+  actions.appendChild(chartBtn); actions.appendChild(tableBtn); actions.appendChild(gearBtn);
+  head.appendChild(actions);
+  card.appendChild(head);
+
+  const filterRow = document.createElement("div");
+  filterRow.className = "ta-filter-bar"; filterRow.style.marginBottom = "14px";
+  const seg = document.createElement("div");
+  seg.className = "ta-seg";
+  ["Overall","Brand"].forEach(m=>{
+    const b = document.createElement("button");
+    b.textContent = m;
+    if (m===taOcState.scope) b.classList.add("active");
+    b.onclick = ()=>{ taOcState.scope=m; if(m==="Overall") taOcState.brands=[]; taOcState.openDropdown=null; taOcState.levelShown=5; renderTAOc(); };
+    seg.appendChild(b);
+  });
+  filterRow.appendChild(seg);
+  if (taOcState.scope==="Brand"){
+    filterRow.appendChild(makeTAMultiDropdown2({key:"ocBrand", placeholder:"Select brands", options:TA_BRANDS.map(b=>b.name), selected:taOcState.brands, onChange:(v)=>{taOcState.brands=v; taOcState.levelShown=5; renderTAOc();}, state:taOcState, rerender:renderTAOc}));
+  }
+  const ocProjOptions = TA_PROJECTS.filter(p=> taOcState.brands.length===0 || taOcState.brands.includes(p.brand)).map(p=>({ value:taProjectKey(p.brand,p.name), label: taOcState.brands.length===1 ? p.name : p.brand+" - "+p.name }));
+  filterRow.appendChild(makeTAMultiDropdown2({key:"ocProject", placeholder:"Select projects", options:ocProjOptions, selected:taOcState.projects, onChange:(v)=>{taOcState.projects=v; taOcState.levelShown=5; renderTAOc();}, state:taOcState, rerender:renderTAOc}));
+  filterRow.appendChild(renderTADateControl({ state:taOcState, valueKey:"date", rerender:renderTAOc }));
+  card.appendChild(filterRow);
+
+  const legend = document.createElement("div");
+  legend.className = "ta-legend-row";
+  legend.innerHTML = '<span><span class="ta-legend-dot" style="background:var(--st-open)"></span>Open ('+esc(taOcState.openBucket.join(", "))+')</span><span><span class="ta-legend-dot" style="background:var(--st-esc)"></span>Closed ('+esc(taOcState.closedBucket.join(", "))+')</span>';
+  card.appendChild(legend);
+
+  const brands = taOcScopedBrands();
+  const allRows = brands.map(b=>{
+    const dist = taScopedDist(b, taOcState.projects, taOcState.date, taOcState.customFrom, taOcState.customTo);
+    return {
+      name:b.name,
+      open: dist.reduce((s,v,i)=> s + (taOcState.openBucket.includes(TA_STATUSES[i]) ? v : 0), 0),
+      closed: dist.reduce((s,v,i)=> s + (taOcState.closedBucket.includes(TA_STATUSES[i]) ? v : 0), 0)
+    };
+  }).filter(r=> r.open>0 || r.closed>0).sort((a,b)=> (b.open+b.closed)-(a.open+a.closed));
+  const rows = allRows.slice(0, taOcState.levelShown);
+
+  if (rows.length===0){
+    card.innerHTML += '<div class="ta-empty">No tickets match the current bucket definition and filters.</div>';
+    return;
+  }
+
+  if (taOcState.view==="chart"){
+    const maxTotal = Math.max(1, ...rows.map(r=>r.open+r.closed));
+    rows.forEach(r=>{
+      const total = r.open+r.closed;
+      const stackWidthPct = Math.round(total/maxTotal*100);
+      const openPct = total ? Math.round(r.open/total*100) : 0;
+      const closedPct = total ? 100-openPct : 0;
+      const row = document.createElement("div");
+      row.className = "ta-oc-row";
+      row.innerHTML = '<div class="ta-lbl">'+esc(r.name)+'</div>'+
+        '<div class="ta-oc-stack-track"><div class="ta-oc-stack" style="width:'+stackWidthPct+'%;">'+
+          '<div class="ta-oc-seg" style="width:'+openPct+'%; background:var(--st-open);"></div>'+
+          '<div class="ta-oc-seg" style="width:'+closedPct+'%; background:var(--st-esc);"></div>'+
+        '</div></div>'+
+        '<div class="ta-val">'+r.open.toLocaleString()+' open &middot; '+r.closed.toLocaleString()+' closed</div>';
+      card.appendChild(row);
+    });
+  } else {
+    const tbl = document.createElement("table");
+    tbl.className = "ta-perf-table";
+    tbl.innerHTML = '<thead><tr><th>Brand</th><th class="ta-num">Open</th><th class="ta-num">Closed</th></tr></thead><tbody>'+
+      rows.map(r=>'<tr><td>'+esc(r.name)+'</td><td class="ta-num">'+r.open.toLocaleString()+'</td><td class="ta-num">'+r.closed.toLocaleString()+'</td></tr>').join("")+
+      '</tbody>';
+    card.appendChild(tbl);
+  }
+
+  if (allRows.length>5 || taOcState.levelShown>5){
+    const remaining = allRows.length - rows.length;
+    const loadWrap = document.createElement("div");
+    loadWrap.className = "ta-load-controls";
+    let controlsHtml = "";
+    if (remaining>0){
+      controlsHtml += `<button class="ta-load-btn" id="taOcLoadMoreBtn">Load ${Math.min(5,remaining)} more</button>
+        <button class="ta-load-link" id="taOcShowAllBtn">Show all (${remaining} remaining)</button>`;
+    }
+    if (taOcState.levelShown>5){
+      controlsHtml += `<button class="ta-load-link" id="taOcViewLessBtn">View less</button>`;
+    }
+    loadWrap.innerHTML = controlsHtml;
+    card.appendChild(loadWrap);
+    const note = document.createElement("div");
+    note.className = "ta-entries-note";
+    note.textContent = rows.length+" of "+allRows.length+" brands shown";
+    card.appendChild(note);
+    const loadMoreBtn = loadWrap.querySelector("#taOcLoadMoreBtn");
+    if (loadMoreBtn) loadMoreBtn.onclick = ()=>{ taOcState.levelShown += 5; renderTAOc(); };
+    const showAllBtn = loadWrap.querySelector("#taOcShowAllBtn");
+    if (showAllBtn) showAllBtn.onclick = ()=>{ taOcState.levelShown = allRows.length; renderTAOc(); };
+    const viewLessBtn = loadWrap.querySelector("#taOcViewLessBtn");
+    if (viewLessBtn) viewLessBtn.onclick = ()=>{ taOcState.levelShown = 5; renderTAOc(); };
+  }
+}
+
+function openTAOcModal(){
+  renderTAModal({
+    title:"Configure chart display",
+    subtitle:"Select which ticket statuses to include in the chart",
+    groups:[
+      {label:"Open tickets", options:TA_STATUSES.filter(s=>s!=="Closed"), selected:taOcState.openBucket, onChange:(v)=>{taOcState.openBucket=v; openTAOcModal(); renderTAOc();}},
+      {label:"Closed tickets", options:TA_STATUSES.filter(s=>s!=="Open"), selected:taOcState.closedBucket, onChange:(v)=>{taOcState.closedBucket=v; openTAOcModal(); renderTAOc();}}
+    ],
+    onClose: ()=> renderTAOc()
+  });
+}
+
+/* ---------------- section: Ticket performance overview ---------------- */
+function taPerfScopedBrands(){
+  return taPerfState.brands.length ? TA_BRANDS.filter(b=>taPerfState.brands.includes(b.name)) : TA_BRANDS;
+}
+
+function renderTAPerf(){
+  const card = document.getElementById("taPerfSection");
+  if(!card) return;
+  card.innerHTML = "";
+  const head = document.createElement("div");
+  head.className = "ta-section-head";
+  head.innerHTML = '<h2>Ticket Performance Overview</h2>';
+  const actions = document.createElement("div");
+  actions.className = "ta-section-head-actions";
+  const gearBtn = document.createElement("button");
+  gearBtn.className = "ta-icon-btn"; gearBtn.textContent = "⚙"; gearBtn.title = "Configure buckets";
+  gearBtn.onclick = ()=> openTAPerfModal();
+  actions.appendChild(gearBtn);
+  head.appendChild(actions);
+  card.appendChild(head);
+
+  const filterRow = document.createElement("div");
+  filterRow.className = "ta-filter-bar"; filterRow.style.marginBottom = "14px";
+  const seg = document.createElement("div");
+  seg.className = "ta-seg";
+  ["Overall","Brand"].forEach(m=>{
+    const b = document.createElement("button");
+    b.textContent = m;
+    if (m===taPerfState.scope) b.classList.add("active");
+    b.onclick = ()=>{ taPerfState.scope=m; if(m==="Overall") taPerfState.brands=[]; taPerfState.openDropdown=null; renderTAPerf(); };
+    seg.appendChild(b);
+  });
+  filterRow.appendChild(seg);
+  if (taPerfState.scope==="Brand"){
+    filterRow.appendChild(makeTAMultiDropdown2({key:"perfBrand", placeholder:"Select brands", options:TA_BRANDS.map(b=>b.name), selected:taPerfState.brands, onChange:(v)=>{taPerfState.brands=v; renderTAPerf();}, state:taPerfState, rerender:renderTAPerf}));
+  }
+  const perfProjOptions = TA_PROJECTS.filter(p=> taPerfState.brands.length===0 || taPerfState.brands.includes(p.brand)).map(p=>({ value:taProjectKey(p.brand,p.name), label: taPerfState.brands.length===1 ? p.name : p.brand+" - "+p.name }));
+  filterRow.appendChild(makeTAMultiDropdown2({key:"perfProject", placeholder:"Select projects", options:perfProjOptions, selected:taPerfState.projects, onChange:(v)=>{taPerfState.projects=v; renderTAPerf();}, state:taPerfState, rerender:renderTAPerf}));
+  filterRow.appendChild(renderTADateControl({ state:taPerfState, valueKey:"date", rerender:renderTAPerf }));
+  card.appendChild(filterRow);
+
+  const brands = taPerfScopedBrands();
+  let rows = brands.map(b=>{
+    const dist = taScopedDist(b, taPerfState.projects, taPerfState.date, taPerfState.customFrom, taPerfState.customTo);
+    const total = dist.reduce((a,c)=>a+c,0);
+    const open = dist.reduce((s,v,i)=> s + (taPerfState.openBucket.includes(TA_STATUSES[i])?v:0),0);
+    const closed = dist.reduce((s,v,i)=> s + (taPerfState.closedBucket.includes(TA_STATUSES[i])?v:0),0);
+    const fcr = dist.reduce((s,v,i)=> s + (taPerfState.fcrBucket.includes(TA_STATUSES[i])?v:0),0);
+    return { name:b.name, open, closed, fcr, total,
+      openRate: total ? Math.round(open/total*100) : 0,
+      closureRate: total ? Math.round(closed/total*100) : 0,
+      fcrRate: total ? Math.round(fcr/total*100) : 0 };
+  });
+  rows.sort((a,b)=> taPerfState.sortDir==="desc" ? b[taPerfState.sortCol]-a[taPerfState.sortCol] : a[taPerfState.sortCol]-b[taPerfState.sortCol]);
+
+  const totalPages = Math.max(1, Math.ceil(rows.length/taPerfState.perPage));
+  taPerfState.page = Math.min(taPerfState.page, totalPages);
+  const pageStart = (taPerfState.page-1)*taPerfState.perPage;
+  const pageRows = rows.slice(pageStart, pageStart+taPerfState.perPage);
+
+  function th(label, col){
+    const arrow = taPerfState.sortCol===col ? (taPerfState.sortDir==="desc" ? "↓" : "↑") : "";
+    return '<th class="ta-num" data-col="'+col+'">'+label+'<span class="ta-arrow">'+arrow+'</span></th>';
+  }
+  const tbl = document.createElement("table");
+  tbl.className = "ta-perf-table";
+  tbl.innerHTML = '<thead><tr>'+
+      '<th>Brand</th><th class="ta-num">Open tickets</th><th class="ta-num">Closed tickets</th><th class="ta-num">FCR tickets</th><th class="ta-num">Total tickets</th>'+
+      th("Open rate","openRate")+th("Closure rate","closureRate")+th("FCR rate","fcrRate")+
+    '</tr></thead><tbody>'+
+      pageRows.map(r=>'<tr><td>'+esc(r.name)+'</td><td class="ta-num">'+r.open.toLocaleString()+'</td><td class="ta-num">'+r.closed.toLocaleString()+'</td><td class="ta-num">'+r.fcr.toLocaleString()+'</td><td class="ta-num">'+r.total.toLocaleString()+'</td><td class="ta-num">'+r.openRate+'%</td><td class="ta-num">'+r.closureRate+'%</td><td class="ta-num">'+r.fcrRate+'%</td></tr>').join("")+
+    '</tbody>';
+  card.appendChild(tbl);
+  tbl.querySelectorAll("th[data-col]").forEach(h=>{
+    h.onclick = ()=>{
+      const col = h.dataset.col;
+      if (taPerfState.sortCol===col){ taPerfState.sortDir = taPerfState.sortDir==="desc" ? "asc" : "desc"; }
+      else { taPerfState.sortCol=col; taPerfState.sortDir="desc"; }
+      taPerfState.page = 1;
+      renderTAPerf();
+    };
+  });
+
+  const pager = document.createElement("div");
+  pager.className = "ta-pager";
+  pager.innerHTML = `
+    <div><select id="taPerfPerPage">${[10,25,50].map(n=>`<option value="${n}" ${n===taPerfState.perPage?'selected':''}>${n}</option>`).join("")}</select> per page</div>
+    <div>Showing ${rows.length ? pageStart+1 : 0} to ${pageStart+pageRows.length} of ${rows.length} brands</div>
+    <div class="ta-pages">
+      <button id="taPerfPrevPage" ${taPerfState.page<=1?'disabled':''}>Previous</button>
+      Page ${taPerfState.page} of ${totalPages}
+      <button id="taPerfNextPage" ${taPerfState.page>=totalPages?'disabled':''}>Next</button>
     </div>`;
+  card.appendChild(pager);
+  document.getElementById("taPerfPerPage").onchange = (e)=>{ taPerfState.perPage = parseInt(e.target.value); taPerfState.page = 1; renderTAPerf(); };
+  document.getElementById("taPerfPrevPage").onclick = ()=>{ taPerfState.page--; renderTAPerf(); };
+  document.getElementById("taPerfNextPage").onclick = ()=>{ taPerfState.page++; renderTAPerf(); };
+}
+
+function openTAPerfModal(){
+  renderTAModal({
+    title:"Configure bucket display",
+    subtitle:"Select which ticket statuses count toward each metric",
+    groups:[
+      {label:"Open tickets", options:TA_STATUSES.filter(s=>s!=="Closed"), selected:taPerfState.openBucket, onChange:(v)=>{taPerfState.openBucket=v; openTAPerfModal(); renderTAPerf();}},
+      {label:"Closed tickets", options:TA_STATUSES.filter(s=>s!=="Open"), selected:taPerfState.closedBucket, onChange:(v)=>{taPerfState.closedBucket=v; openTAPerfModal(); renderTAPerf();}},
+      {label:"FCR tickets", options:TA_STATUSES, selected:taPerfState.fcrBucket, onChange:(v)=>{taPerfState.fcrBucket=v; openTAPerfModal(); renderTAPerf();}}
+    ],
+    onClose: ()=> renderTAPerf()
+  });
+}
+
+/* ---------------- top-level wiring ---------------- */
+function renderTAAll(){
+  taState.selectedStatus = null;
+  renderTAFilterBar();
+  renderTAHeader();
+  const drillArea = document.getElementById("taDrillArea");
+  if(drillArea) drillArea.innerHTML = "";
+}
+
+function taGlobalClickHandler(){
+  if(taState.openDropdown){ taState.openDropdown=null; renderTAFilterBar(); }
+  if(taOcState.openDropdown){ taOcState.openDropdown=null; renderTAOc(); }
+  if(taPerfState.openDropdown){ taPerfState.openDropdown=null; renderTAPerf(); }
+  if(taState.calOpen){ taCloseCalendar(taState); renderTAFilterBar(); }
+  if(taOcState.calOpen){ taCloseCalendar(taOcState); renderTAOc(); }
+  if(taPerfState.calOpen){ taCloseCalendar(taPerfState); renderTAPerf(); }
+}
+
+function ensureTAModalRoot(){
+  if(!document.getElementById('taModalRoot')){
+    const d = document.createElement('div');
+    d.id = 'taModalRoot';
+    document.body.appendChild(d);
+  }
+}
+
+function injectTAStyles(){
+  if(document.getElementById('taStyles')) return;
+  const style = document.createElement('style');
+  style.id = 'taStyles';
+  style.textContent = `
+    .ta-page{max-width:1200px;margin:0 auto;padding:20px 0 40px;color:var(--ink);font-size:14px;}
+    .ta-h1{font-size:20px;font-weight:600;margin:0 0 18px;color:var(--ink);}
+    .ta-filter-bar{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:20px;align-items:flex-start;position:relative;}
+    .ta-seg{display:flex;border:1px solid var(--line);border-radius:6px;overflow:hidden;height:36px;}
+    .ta-seg button{border:none;background:#fff;padding:8px 14px;font-size:13px;font-family:inherit;cursor:pointer;color:var(--ink-2);border-right:1px solid var(--line);}
+    .ta-seg button:last-child{border-right:none;}
+    .ta-seg button.active{background:var(--primary);color:#fff;font-weight:500;}
+    .ta-dd{position:relative;}
+    .ta-dd-btn{border:1px solid var(--line);border-radius:6px;background:#fff;padding:8px 12px;font-size:13px;font-family:inherit;cursor:pointer;min-width:150px;height:36px;text-align:left;display:flex;justify-content:space-between;align-items:center;gap:8px;color:var(--ink);}
+    .ta-dd-btn .ta-muted{color:var(--muted);}
+    .ta-dd-panel{position:absolute;top:calc(100% + 4px);left:0;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow-lg);width:240px;z-index:400;padding:8px;}
+    .ta-dd-search{width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:6px;font-size:12.5px;font-family:inherit;margin-bottom:6px;outline:none;box-sizing:border-box;}
+    .ta-dd-selectall{font-size:12px;color:var(--primary);cursor:pointer;padding:4px 6px;font-weight:500;}
+    .ta-dd-list{max-height:220px;overflow-y:auto;margin-top:4px;}
+    .ta-dd-item{display:flex;align-items:center;gap:8px;padding:6px 6px;font-size:13px;cursor:pointer;border-radius:4px;}
+    .ta-dd-item:hover{background:var(--bg);}
+    .ta-dd-item input{margin:0;}
+    .ta-date-select{border:1px solid var(--line);border-radius:6px;padding:8px 10px;font-size:13px;font-family:inherit;background:#fff;height:36px;}
+    .ta-custom-dates{display:flex;gap:6px;align-items:center;}
+    .ta-custom-dates input{border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:12.5px;font-family:inherit;}
+    .ta-header-card{border:1px solid var(--line);border-radius:12px;padding:18px 20px;background:#fff;margin-bottom:20px;}
+    .ta-card-title{font-size:15px;font-weight:600;margin:0 0 14px;color:var(--ink);}
+    .ta-total-num{font-size:30px;font-weight:600;color:var(--ink);}
+    .ta-total-sub{font-size:12.5px;color:var(--muted);margin-bottom:14px;}
+    .ta-bar-row{display:flex;align-items:center;gap:10px;margin-bottom:9px;cursor:pointer;}
+    .ta-bar-row .ta-lbl{width:160px;font-size:12.5px;color:var(--ink);flex-shrink:0;}
+    .ta-bar-row .ta-track{flex:1;background:var(--bg);border-radius:4px;height:20px;position:relative;}
+    .ta-bar-row .ta-fill{height:100%;border-radius:4px;}
+    .ta-bar-row .ta-val{width:60px;text-align:right;font-size:12.5px;font-weight:600;color:var(--ink);}
+    .ta-breadcrumb{font-size:12.5px;color:var(--muted);margin:4px 0 10px;}
+    .ta-breadcrumb span{cursor:pointer;}
+    .ta-breadcrumb b{color:var(--ink);font-weight:600;}
+    .ta-breadcrumb .ta-sep{margin:0 6px;}
+    .ta-panel{border:1px solid var(--line);border-radius:10px;padding:16px 18px;background:#fff;margin-bottom:14px;}
+    .ta-empty{color:var(--muted);font-size:13px;text-align:center;padding:26px 10px;}
+    .ta-load-controls{display:flex;justify-content:center;gap:16px;margin-top:6px;}
+    .ta-load-btn{padding:7px 14px;border:1px solid var(--line);border-radius:6px;background:#fff;font-size:12.5px;cursor:pointer;font-family:inherit;color:var(--ink);}
+    .ta-load-link{background:none;border:none;color:var(--primary);font-size:12.5px;cursor:pointer;font-family:inherit;}
+    .ta-entries-note{text-align:center;font-size:12px;color:var(--muted);margin-top:8px;}
+    .ta-section-card{border:1px solid var(--line);border-radius:12px;padding:18px 20px;background:#fff;margin-top:24px;}
+    .ta-section-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;}
+    .ta-section-head h2{font-size:15px;font-weight:600;margin:0;color:var(--ink);}
+    .ta-section-head-actions{display:flex;align-items:center;gap:8px;}
+    .ta-icon-btn{width:32px;height:32px;border:1px solid var(--line);border-radius:6px;background:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:15px;color:var(--muted);}
+    .ta-icon-btn.active{background:var(--bg);color:var(--ink);}
+    .ta-legend-row{display:flex;gap:16px;font-size:12px;color:var(--muted);margin:8px 0 12px;}
+    .ta-legend-dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:5px;}
+    .ta-oc-row{display:flex;align-items:center;gap:10px;margin-bottom:10px;}
+    .ta-oc-row .ta-lbl{width:170px;font-size:12.5px;flex-shrink:0;color:var(--ink);}
+    .ta-oc-stack-track{flex:1;height:20px;display:flex;align-items:center;}
+    .ta-oc-stack{height:100%;border-radius:4px;display:flex;overflow:hidden;background:var(--bg);}
+    .ta-oc-seg{height:100%;}
+    .ta-oc-row .ta-val{width:190px;text-align:right;font-size:12px;color:var(--muted);flex-shrink:0;}
+    table.ta-perf-table{width:100%;border-collapse:collapse;font-size:13px;}
+    table.ta-perf-table th{text-align:left;padding:9px 8px;border-bottom:1px solid var(--line-2);font-weight:600;color:var(--ink);cursor:pointer;white-space:nowrap;}
+    table.ta-perf-table th.ta-num, table.ta-perf-table td.ta-num{text-align:right;}
+    table.ta-perf-table td{padding:11px 8px;border-bottom:1px solid var(--line-2);color:var(--ink);}
+    table.ta-perf-table th .ta-arrow{font-size:10px;color:var(--muted);margin-left:3px;}
+    .ta-pager{display:flex;align-items:center;justify-content:space-between;margin-top:14px;font-size:12.5px;color:var(--muted);flex-wrap:wrap;gap:8px;}
+    .ta-pager select{padding:5px 8px;border:1px solid var(--line);border-radius:6px;font-family:inherit;}
+    .ta-pager .ta-pages{display:flex;align-items:center;gap:8px;}
+    .ta-pager button{padding:6px 12px;border:1px solid var(--line);background:#fff;border-radius:6px;cursor:pointer;font-family:inherit;font-size:12.5px;}
+    .ta-pager button:disabled{opacity:.4;cursor:default;}
+    .ta-modal-overlay{position:fixed;inset:0;background:rgba(25,18,40,.45);display:flex;align-items:center;justify-content:center;z-index:9999;}
+    .ta-modal-box{background:#fff;border-radius:10px;padding:24px 28px;max-width:520px;width:92%;max-height:80vh;overflow-y:auto;}
+    .ta-modal-box h3{font-size:17px;font-weight:600;margin:0 0 4px;text-align:center;color:var(--ink);}
+    .ta-modal-sub{font-size:13px;color:var(--muted);text-align:center;margin-bottom:18px;}
+    .ta-modal-groups{display:flex;gap:32px;flex-wrap:wrap;}
+    .ta-modal-group-label{font-size:13px;font-weight:600;width:110px;flex-shrink:0;padding-top:4px;color:var(--ink);}
+    .ta-modal-checks{display:flex;flex-direction:column;gap:8px;}
+    .ta-modal-checks label{display:flex;align-items:center;gap:8px;font-size:13.5px;cursor:pointer;color:var(--ink);}
+    .ta-modal-close-btn{margin-top:20px;width:100%;padding:10px;border:1px solid var(--line);border-radius:6px;background:#fff;font-family:inherit;font-size:14px;cursor:pointer;color:var(--ink);}
+    .ta-cal-panel{position:absolute;top:calc(100% + 4px);left:0;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow-lg);width:260px;z-index:400;padding:10px;}
+    .ta-cal-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
+    .ta-cal-label{font-size:13px;font-weight:600;color:var(--ink);}
+    .ta-cal-nav{border:1px solid var(--line);background:#fff;border-radius:6px;width:26px;height:26px;cursor:pointer;font-size:14px;color:var(--ink-2);line-height:1;}
+    .ta-cal-nav:hover{background:var(--bg);}
+    .ta-cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;}
+    .ta-cal-dow{font-size:10.5px;color:var(--muted);text-align:center;padding:4px 0;font-weight:600;}
+    .ta-cal-day{font-size:12.5px;text-align:center;padding:6px 0;cursor:pointer;color:var(--ink);border-radius:4px;}
+    .ta-cal-day:not(.ta-cal-blank):hover{background:var(--bg);}
+    .ta-cal-day.ta-cal-blank{cursor:default;}
+    .ta-cal-day.in-range{background:var(--primary-050);border-radius:0;}
+    .ta-cal-day.range-start{border-radius:50% 0 0 50%;}
+    .ta-cal-day.range-end{border-radius:0 50% 50% 0;}
+    .ta-cal-day.range-start.range-end{border-radius:50%;}
+    .ta-cal-day.range-start,.ta-cal-day.range-end{background:var(--primary);color:#fff;font-weight:600;}
+    .ta-cal-footer{margin-top:8px;padding-top:8px;border-top:1px solid var(--line-2);font-size:12px;color:var(--muted);display:flex;align-items:center;justify-content:space-between;gap:8px;}
+    .ta-cal-clear{border:none;background:none;color:var(--primary);font-size:12px;font-weight:500;cursor:pointer;font-family:inherit;padding:0;}
+  `;
+  document.head.appendChild(style);
+}
+
+function renderTicketOverview(){
+  injectTAStyles();
+  ensureTAModalRoot();
+  document.getElementById('taModalRoot').innerHTML = '';
+  mount().innerHTML = `
+    <div class="ta-page">
+      <h1 class="ta-h1">Ticketing Analytics - Overview</h1>
+      <div class="ta-header-card">
+        <h2 class="ta-card-title">Tickets - Progressive Drilldown</h2>
+        <div class="ta-filter-bar" id="taFilterBar"></div>
+        <div id="taHeaderCardBody"></div>
+      </div>
+      <div id="taDrillArea"></div>
+      <div class="ta-section-card" id="taOcSection"></div>
+      <div class="ta-section-card" id="taPerfSection"></div>
+    </div>
+  `;
+  if(!window.__taClickBound){
+    window.__taClickBound = true;
+    document.addEventListener('click', taGlobalClickHandler);
+  }
+  renderTAAll();
+  renderTAOc();
+  renderTAPerf();
 }
 function kpiGrid(){
   return `<div class="kpi-grid">
@@ -811,7 +1855,7 @@ function ticketDetailHTML(t){
       <div class="panel"><div class="kv-l">Customer</div>${t.customer_info?`<div class="cust-line" style="margin-top:8px"><div class="avatar">${initials(t.customer_info.name)}</div>
         <div><div class="c-name">${esc(maskName(t,t.customer_info.name))}</div><div class="c-sub">${esc(maskPhone(t,t.customer_info.phone))}</div><div class="c-sub">${esc(maskEmail(t,t.customer_info.email))}</div></div></div>`:'<div class="page-sub">No customer linked</div>'}</div>
       <div class="panel"><div class="kv-l">Assigned To</div>
-        ${t.assigned_to?`<div style="display:flex;align-items:center;gap:8px;margin-top:8px;margin-bottom:8px"><div class="avatar" style="width:32px;height:32px;position:relative;flex-shrink:0">${initials(agentName(t.assigned_to))}<span class="status-dot" style="position:absolute;top:-2px;right:-2px;width:12px;height:12px;border-radius:50%;border:0.5px solid rgba(255,255,255,0.6);background:${getAgentStatusDotClass(t.assigned_to)==='unavailable'?'#9ca3af':'#10b981'};display:block;animation:none;box-shadow:none"></span></div><div style="flex:1"><div style="font-weight:600;font-size:13px">${esc(agentName(t.assigned_to))}</div></div></div>`:''}
+        ${t.assigned_to?`<div style="display:flex;align-items:center;gap:8px;margin-top:8px;margin-bottom:8px"><div class="avatar" style="width:32px;height:32px;flex-shrink:0">${initials(agentName(t.assigned_to))}<span class="status-dot ${getAgentStatusDotClass(t.assigned_to)}"></span></div><div style="flex:1"><div style="font-weight:600;font-size:13px">${esc(agentName(t.assigned_to))}</div></div></div>`:''}
         <select class="select" id="dvAssignee" style="background:#fff;margin-top:8px">${getAssigneeOptionsHTML(t.assigned_to)}</select>
         ${t.assigned_to===CURRENT_USER.email
           ? `<button class="btn btn-light btn-sm" id="dvAssignMe" style="margin-top:8px" disabled>✓ Assigned to you</button>`
@@ -858,7 +1902,7 @@ function wireDetail(t){
   if($('#dvTagSelect')) $('#dvTagSelect').onchange=e=>{const v=e.target.value;if(v){t.tags=t.tags||[];if(!t.tags.includes(v)){t.tags.push(v);paintListKeepScroll();}}};
   $$('#dvTags [data-rmt]').forEach(b=>b.onclick=()=>{t.tags=t.tags.filter(x=>x!==b.dataset.rmt);paintListKeepScroll();});
   const collab=[],groups=[];
-  $('#dvCollab').onchange=e=>{if(e.target.value&&!collab.includes(e.target.value)){collab.push(e.target.value);$('#collabChips').innerHTML=collab.map(c=>`<span class="sel-chip"><span style="display:inline-flex;align-items:center;gap:6px"><span class="avatar" style="position:relative;width:24px;height:24px;font-size:10px;font-weight:700">${initials(agentName(c))}<span class="status-dot ${getAgentStatusDotClass(c)}" style="width:8px;height:8px;bottom:-1px;right:-1px;border-width:1px"></span></span>${esc(agentName(c))}</span></span>`).join('');}e.target.value='';};
+  $('#dvCollab').onchange=e=>{if(e.target.value&&!collab.includes(e.target.value)){collab.push(e.target.value);$('#collabChips').innerHTML=collab.map(c=>`<span class="sel-chip"><span style="display:inline-flex;align-items:center;gap:6px"><span class="avatar" style="width:24px;height:24px;font-size:10px;font-weight:700">${initials(agentName(c))}<span class="status-dot ${getAgentStatusDotClass(c)}"></span></span>${esc(agentName(c))}</span></span>`).join('');}e.target.value='';};
   $('#dvGroup').onchange=e=>{if(e.target.value&&!groups.includes(e.target.value)){groups.push(e.target.value);$('#groupChips').innerHTML=groups.map(g=>`<span class="sel-chip">${esc(g)}</span>`).join('');}e.target.value='';};
   $('#dvAddFile').onclick=()=>$('#dvFileInput').click();
   $('#dvFileInput').onchange=e=>{[...e.target.files].forEach(f=>{t.attachments=t.attachments||[];t.attachments.push({attachment_id:'att_'+Date.now(),filename:f.name,size_bytes:f.size,mime_type:f.type||'application/octet-stream',uploaded_by:'rahul.ukey@karnival.com',uploaded_at:new Date()});});paintListKeepScroll();toast('Attachment added');};
@@ -901,6 +1945,7 @@ function paintBulkBar(){
       <select class="select bb-sel" id="bbAssign"><option value="">Assign to…</option>
         <optgroup label="Agents">${AGENTS.map(a=>{const s=StatusService.getAgentStatus(a.email);return `<option value="a:${a.email}" ${StatusService.isAgentAvailable(a.email)?'':'disabled'}>${a.name}${s.status==='not_available'&&s.fromDate&&s.tillDate?` (unavailable: ${StatusService.formatDateRange(s.fromDate,s.tillDate)})`:''}</option>`;}).join('')}</optgroup>
         <optgroup label="Groups">${GROUPS.map(g=>`<option value="g:${esc(g)}">${esc(g)}</option>`).join('')}</optgroup></select>
+      <button class="btn btn-primary btn-sm" id="bbAssignGo" hidden>Assign</button>
       <select class="select bb-sel" id="bbStatus"><option value="">Status…</option>${ENUM.status.map(s=>`<option value="${s}">${statusLabel(s)}</option>`).join('')}</select>
       <select class="select bb-sel" id="bbPriority"><option value="">Priority…</option>${ENUM.priority.map(p=>`<option>${titleCase(p)}</option>`).join('')}</select>
       <select class="select bb-sel" id="bbTag"><option value="">Add tag…</option>${TAGS.map(t=>`<option>${esc(t)}</option>`).join('')}</select>
@@ -908,11 +1953,29 @@ function paintBulkBar(){
   const sel=()=>[...state.selected].map(findTicket).filter(Boolean);
   $('#bbClear').onclick=()=>{state.selected.clear();paintListKeepScroll();};
   $('#bbSelectAll').onclick=()=>{filteredTickets().forEach(t=>state.selected.add(t.ticket_number));paintListKeepScroll();};
-  $('#bbAssignMe').onclick=()=>bulkAssign(sel(),CURRENT_USER.email,CURRENT_USER.name,false);
-  $('#bbAssign').onchange=e=>{const v=e.target.value;if(!v)return;const isGroup=v.startsWith('g:');const val=v.slice(2);
-    bulkAssign(sel(), isGroup?null:val, isGroup?val:agentName(val), isGroup);};
+  $('#bbAssignMe').onclick=()=>openBulkAssignConfirm(sel(),CURRENT_USER.email,CURRENT_USER.name,false);
+  $('#bbAssign').onchange=e=>{ $('#bbAssignGo').hidden=!e.target.value; };
+  $('#bbAssignGo').onclick=()=>{
+    const v=$('#bbAssign').value; if(!v) return;
+    const isGroup=v.startsWith('g:'); const val=v.slice(2);
+    openBulkAssignConfirm(sel(), isGroup?null:val, isGroup?val:agentName(val), isGroup);
+  };
   $('#bbStatus').onchange=e=>{if(e.target.value) {bulkStatus(sel(), e.target.value.toUpperCase().replace(/ /g,'_'));e.target.value='';}};  $('#bbPriority').onchange=e=>{if(e.target.value) bulkPriority(sel(), e.target.value.toUpperCase());};
   $('#bbTag').onchange=e=>{if(e.target.value) bulkTag(sel(), e.target.value);};
+}
+function openBulkAssignConfirm(list, email, name, isGroup){
+  if(!list.length) return;
+  const noun=list.length>1?'Tickets':'Ticket';
+  openModal(`<div class="modal-head"><div class="mh-ico">${isGroup?'👥':'👤'}</div><h2>Assign ${list.length} ${noun}</h2><button class="modal-close" data-close>×</button></div>
+    <div class="modal-body">
+      <div class="ok-text">Applying to ${list.length} selected ticket(s): ${list.map(t=>t.ticket_number).join(', ')}</div>
+      <div style="margin-top:14px;font-size:14px">Assign to <b>${esc(name)}</b>${isGroup?' (group)':''}?</div>
+    </div>
+    <div class="modal-foot"><div class="spacer"></div>
+      <button class="btn btn-light" data-close>Cancel</button>
+      <button class="btn btn-primary" id="baConfirm">Assign ${list.length} ${noun}</button></div>`, 560);
+  $$('[data-close]').forEach(b=>b.onclick=closeModal);
+  $('#baConfirm').onclick=()=>{ closeModal(); bulkAssign(list, email, name, isGroup); };
 }
 function bulkAssign(list, email, name, isGroup){
   if(!list.length) return;
@@ -1023,7 +2086,7 @@ function historyEntries(t){
   return items.sort((a,b)=>b.at-a.at);
 }
 function pj2(t){return PROJECTS.find(p=>p.project_id===t.project_id)||PROJECTS[0];}
-function commentHTML(c){return `<div class="comment"><div class="avatar" style="position:relative">${initials(c.author)}<span class="status-dot" style="position:absolute;top:-2px;right:-2px;width:12px;height:12px;border-radius:50%;border:0.5px solid rgba(255,255,255,0.6);background:${getAgentStatusDotClass(c.email)==='unavailable'?'#9ca3af':'#10b981'};display:block;animation:none;box-shadow:none"></span></div>
+function commentHTML(c){return `<div class="comment"><div class="avatar">${initials(c.author)}<span class="status-dot ${getAgentStatusDotClass(c.email)}"></span></div>
   <div style="flex:1"><div class="c-head"><span class="c-author">${esc(c.author)}</span><span class="c-time">${fmtDateAbs(c.at)}</span></div>
   <div class="c-body">${renderMentions(c.text)}</div></div></div>`;}
 

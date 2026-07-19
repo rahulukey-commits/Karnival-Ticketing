@@ -267,8 +267,50 @@ const TICKETS = [
     assigned:'rahul.ukey@karnival.com', assignedName:'Rahul Ukey', customer:{name:'Test Customer 6', email:'test6@example.com', phone:'9999999996', id:'CUST-TEST6'}, ageH:9}),
 ];
 
+// Generate large dataset with thousands of tickets
+const brands=['Peter England','Van Heusen','Allen Solly','Louis Philippe'];
+const statuses=['OPEN','INPROGRESS','VERIFY','RESOLVED','CLOSED','ESCALATED','AUTO_ESCALATED','REOPEN'];
+const titles=['Sizing issue','Delivery delay','Quality complaint','Refund pending','Color fade','Stitching defect','Missing item','Damaged packaging'];
+const agents=['rahul.ukey@karnival.com','sushil.sharma@karnival.com','siva@karnival.com','siva.kumar@karnival.com','priya.menon@karnival.com','arjun.rao@karnival.com'];
+
+const statusDist={
+  'Peter England':{OPEN:345,INPROGRESS:95,VERIFY:50,RESOLVED:265,CLOSED:185,ESCALATED:35,AUTO_ESCALATED:78,REOPEN:25},
+  'Van Heusen':{OPEN:280,INPROGRESS:70,VERIFY:40,RESOLVED:210,CLOSED:145,ESCALATED:28,AUTO_ESCALATED:60,REOPEN:20},
+  'Allen Solly':{OPEN:185,INPROGRESS:48,VERIFY:26,RESOLVED:138,CLOSED:95,ESCALATED:18,AUTO_ESCALATED:40,REOPEN:12},
+  'Louis Philippe':{OPEN:148,INPROGRESS:38,VERIFY:21,RESOLVED:110,CLOSED:80,ESCALATED:15,AUTO_ESCALATED:31,REOPEN:10}
+};
+
+let ticketNum=111;
+for(const brand of brands){
+  const dist=statusDist[brand];
+  for(const [status,count] of Object.entries(dist)){
+    for(let i=0; i<count; i++){
+      const title=titles[Math.floor(Math.random()*titles.length)];
+      const agent=agents[Math.floor(Math.random()*agents.length)];
+      const ageH=Math.floor(Math.random()*720);
+      TICKETS.push(mkTicket({
+        num:`TKT-${ticketNum++}`,
+        brand,
+        project:'test_proj',
+        projectName:'Test Project',
+        title:`${title} (${Math.floor(Math.random()*1000)+100})`,
+        status,
+        priority:['HIGH','MEDIUM','LOW'][Math.floor(Math.random()*3)],
+        source:['MANUAL','EMAIL','CHAT','SURVEY'][Math.floor(Math.random()*4)],
+        city:brand==='Peter England'?'Mumbai':'Bengaluru',
+        state:'MH',
+        zone:'West',
+        assigned:agent,
+        assignedName:agent.split('@')[0],
+        customer:{name:`Cust-${Math.random().toString(36).substr(2,9)}`,email:`cust${Math.random().toString(36).substr(2,5)}@example.com`,phone:`98${Math.random().toString().substr(2,10)}`,id:`CUST-${Math.floor(Math.random()*99999)}`},
+        ageH
+      }));
+    }
+  }
+}
+
 // status counts (mirrors All Tickets KPIs in the recording)
-const KPI = {OPEN:294, INPROGRESS:36, VERIFY:8, RESOLVED:11, CLOSED:41, REOPEN:2, TOTAL:692};
+const KPI = {OPEN:958, INPROGRESS:251, VERIFY:137, RESOLVED:723, CLOSED:505, REOPEN:67, ESCALATED:96, AUTO_ESCALATED:209, TOTAL:2146};
 
 const COUNTRY_STATS = [
   {country:'India', count:438}, {country:'UAE', count:171}, {country:'UK', count:52}, {country:'USA', count:31},
