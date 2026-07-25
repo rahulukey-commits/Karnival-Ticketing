@@ -74,13 +74,15 @@ const StatusService = {
 
     if (agent.status === 'available') return true;
 
-    // Check if till date has passed
+    // Check if till date has passed (till date itself is still unavailable —
+    // agent only becomes available the day AFTER, consistent with the
+    // current-user status indicator's inclusive today<=tillDate check)
     if (agent.tillDate) {
       const [tillY, tillM, tillD] = agent.tillDate.split('-');
       const tillDateObj = new Date(tillY, tillM - 1, tillD, 0, 0, 0, 0);
       const today = new Date();
       today.setHours(0, 0, 0, 0);
-      if (tillDateObj <= today) {
+      if (tillDateObj < today) {
         agent.status = 'available';
         agent.fromDate = null;
         agent.tillDate = null;
@@ -128,13 +130,14 @@ const StatusService = {
           agent.fromDate = fromDate;
           agent.tillDate = tillDate;
 
-          // Auto-revert if till date has passed
+          // Auto-revert if till date has passed (till date itself is still
+          // unavailable — see isAgentAvailable for the matching semantics)
           if (agent.status === 'not_available' && agent.tillDate) {
             const [tillY, tillM, tillD] = agent.tillDate.split('-');
             const tillDateObj = new Date(tillY, tillM - 1, tillD, 0, 0, 0, 0);
             const today = new Date();
             today.setHours(0, 0, 0, 0);
-            if (tillDateObj <= today) {
+            if (tillDateObj < today) {
               agent.status = 'available';
               agent.fromDate = null;
               agent.tillDate = null;

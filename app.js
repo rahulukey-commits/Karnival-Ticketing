@@ -207,7 +207,8 @@ function getAssigneeOptionsHTML(currentAssignee = null, includeUnavailable = tru
     if(isAvailable || isSelected){
       available.push(`<option value="${a.email}" ${isSelected ? 'selected' : ''}>${label}</option>`);
     } else if(includeUnavailable){
-      unavailable.push(`<option value="${a.email}" disabled style="color:#999">${label} (unavailable)</option>`);
+      const suffix = label.includes('(unavailable') ? '' : ' (unavailable)';
+      unavailable.push(`<option value="${a.email}" disabled style="color:#999">${label}${suffix}</option>`);
     }
   });
 
@@ -216,6 +217,11 @@ function getAssigneeOptionsHTML(currentAssignee = null, includeUnavailable = tru
 }
 
 /* ---------- state ---------- */
+// Generic unsaved-changes navigation guard: any view can set this to a function
+// fn(next) that either calls next() immediately (nothing dirty) or intercepts
+// with its own confirmation UI and calls next() only once the user confirms.
+// Checked by the sheet-close button and sidebar nav clicks before navigating away.
+let appUnsavedGuard = null;
 const state = {
   page:1, pageSize:10,
   filters:{search:'',assignee:'',priority:'',status:'',tag:'',brand:'',project:'',from:'',to:''},
@@ -231,7 +237,7 @@ function openSheet(){
   const ov=$('#overlay');
   if(!$('#sheetBody')){
     ov.innerHTML=`<div class="sheet"><button class="sheet-close" id="sheetClose" title="Close">✕</button><div class="sheet-body" id="sheetBody"></div></div>`;
-    $('#sheetClose').onclick=()=>go('home');
+    $('#sheetClose').onclick=()=>{ if(appUnsavedGuard) appUnsavedGuard(()=>go('home')); else go('home'); };
   }
   ov.classList.add('show'); document.body.style.overflow='hidden';
 }
@@ -1647,7 +1653,7 @@ function createModalHTML(){
         </div>
       </div>
       <label class="lbl" style="margin-top:16px">Suggested Tags</label>
-      <div class="chips" id="dSuggested">${(p.creationLogic.flatMap(c=>c.tags).concat(['cod','asdfghkl'])).filter((v,i,a)=>a.indexOf(v)===i).map(t=>`<button type="button" class="chip tag ${draft.tags.includes(t)?'on':''}" data-tag="${esc(t)}">${esc(t)}</button>`).join('')}</div>
+      <div class="chips" id="dSuggested">${((p.suggestedTags||[]).concat(['cod','asdfghkl'])).filter((v,i,a)=>a.indexOf(v)===i).map(t=>`<button type="button" class="chip tag ${draft.tags.includes(t)?'on':''}" data-tag="${esc(t)}">${esc(t)}</button>`).join('')}</div>
       <label class="lbl" style="margin-top:16px">Add Custom Tags</label>
       <div class="search-inline"><input class="field" id="dCustomTag" placeholder="Type a custom tag..."><button class="btn btn-light" id="dAddTag">＋ Add Tag</button></div>
       <label class="lbl" style="margin-top:16px">Selected Categories &amp; Tags</label>
@@ -1741,7 +1747,7 @@ function syncCreateBtn(){const b=$('#dCreate');if(!b)return; b.disabled=!createV
 function submitCreate(){
   const p=pj();
   const store=STORES.find(s=>s.id===draft.store);
-  const prefix=(p.name.match(/\b\w/g)||['T']).slice(0,4).join('').toUpperCase();
+  const prefix=p.code||makeProjectCode(p.name);
   const cat=resolvedCategory(), sub=resolvedSubCategory();
 
   // Show loader
@@ -1755,20 +1761,214 @@ function submitCreate(){
       sentiment:draft.sentiment||null, subCategory:sub||null,
       store:draft.store||null, storeName:store?store.name:null, location:store?store.address:null,
       city:store?store.city:null, state:store?store.state:null, zone:store?store.zone:null, country:store?store.country:'India',
-      assigned:draft.assignee, assignedName:agentName(draft.assignee), createdBy:'Rahul Ukey',
+      assigned:draft.assignee, assignedName:agentName(draft.assignee), createdBy:CURRENT_USER.name,
       customer:{name:draft.custName||'—', email:draft.custEmail, phone:draft.custPhone, id:draft.custId},
       description:draft.desc, categories:cat?[cat]:[], tags:draft.tags.slice(),
       skus:draft.sku?[draft.sku]:[], billId:draft.invoices[0]||null,
-      attachments:draft.files.map((f,i)=>({attachment_id:'att_'+Date.now()+i, filename:f.name, size_bytes:f.size, mime_type:f.type||'application/octet-stream', uploaded_by:'rahul.ukey@karnival.com', uploaded_at:new Date()})),
-      history:[{field:'status', old:'—', neu:'OPEN', by:'rahul.ukey@karnival.com', at:new Date()},
-               {field:'assigned_to', old:'—', neu:agentName(draft.assignee), by:'rahul.ukey@karnival.com', at:new Date()}],
+      attachments:draft.files.map((f,i)=>({attachment_id:'att_'+Date.now()+i, filename:f.name, size_bytes:f.size, mime_type:f.type||'application/octet-stream', uploaded_by:CURRENT_USER.email, uploaded_at:new Date()})),
+      history:[{field:'status', old:'—', neu:'OPEN', by:CURRENT_USER.email, at:new Date()},
+               {field:'assigned_to', old:'—', neu:agentName(draft.assignee), by:CURRENT_USER.email, at:new Date()}],
     });
     TICKETS.unshift(t); KPI.OPEN++; KPI.TOTAL++;
-    LOGS.unshift({at:new Date(), ticket:t.ticket_number, event:'CREATED', actor:'Rahul Ukey', detail:`Ticket created from ${titleCase(draft.source)}`});
+    LOGS.unshift({at:new Date(), ticket:t.ticket_number, event:'CREATED', actor:CURRENT_USER.name, detail:`Ticket created from ${titleCase(draft.source)}`});
     toast('✅ Ticket Created', `${t.ticket_number} · ${t.title}`);
     go('view/'+t.ticket_number);
   }, 800);
 }
+
+/* ============================================================ VERIF_FEATURE
+   Verification flow: ops agent sends a ticket for review, the system picks a
+   verifier from a per-project pool (load-based, availability-aware), and the
+   verifier either marks it verified or rejects it back with a reason.
+   REMOVABLE: this whole block, plus a handful of single-line call-sites each
+   marked with a VERIF_FEATURE hook comment inside ticketDetailHTML, wireDetail,
+   historyEntries, and pjRenderForm (Projects tab). Delete the block and those
+   lines and nothing else in the app changes. ============================================================ */
+const VERIF_CONFIG = {
+  pe_test_2: { verifiers: ['rahul.ukey@karnival.com', 'sushil.sharma@karnival.com'], instructions: 'Check the comments, Check the resolution' },
+  soll_cod: { verifiers: ['siva@karnival.com', 'rahul.ukey@karnival.com'], instructions: 'Confirm the COD refund or resolution was actually applied before signing off.' },
+  vh_live: { verifiers: ['siva.kumar@karnival.com', 'priya.menon@karnival.com'], instructions: 'Cross-check the dashboard figures against the live store feed before marking verified.' },
+}; // project_id -> {verifiers:[email,...], instructions:''}
+const VERIF_REJECT_REASONS = ['Incomplete Work','Incorrect Resolution','Missing Documentation','Policy Not Followed','Other'];
+
+function verifConfig(projectId){ return VERIF_CONFIG[projectId] || null; }
+
+function verifPickVerifier(projectId){
+  const cfg = verifConfig(projectId);
+  if(!cfg || !cfg.verifiers.length) return null;
+  let pool = cfg.verifiers.filter(e=>StatusService.isAgentAvailable(e));
+  const fellBack = pool.length===0;
+  if(fellBack) pool = cfg.verifiers.slice();
+  const load = email => TICKETS.filter(t2=>t2.assigned_to===email && t2.ticket_status==='VERIFY').length;
+  let best = pool[0];
+  pool.forEach(e=>{ if(load(e) < load(best)) best = e; });
+  return { email: best, fellBack };
+}
+
+// Inline button only — rendered as a flex child of .detail-controls, pushed to the right of Priority/Status/Store/Due Date.
+function verifSendButtonHTML(t){
+  const cfg = verifConfig(t.project_id);
+  if(!cfg || !cfg.verifiers.length) return '';
+  if(t.ticket_status==='VERIFY') return '';
+  if(t.assigned_to===CURRENT_USER.email && !['RESOLVED','CLOSED'].includes(t.ticket_status)){
+    return `<button class="btn btn-light btn-sm" id="verifSend" style="margin-left:auto">🔍 Send for Verification</button>`;
+  }
+  return '';
+}
+// Everything else — the Mark Verified/Reject panel and the passive "awaiting verification" note — stays below the controls row.
+function verifStatusPanelHTML(t){
+  const cfg = verifConfig(t.project_id);
+  if(!cfg || !cfg.verifiers.length) return '';
+  if(t.ticket_status==='VERIFY'){
+    if(t.assigned_to===CURRENT_USER.email){
+      return `<div class="panel" style="margin-top:14px;border-color:var(--primary-050);background:var(--primary-050)">
+        <div class="kv-l">🔍 Verification</div>
+        ${cfg.instructions?`<div class="page-sub" style="margin:8px 0;white-space:pre-wrap">${esc(cfg.instructions)}</div>`:'<div class="page-sub" style="margin:8px 0">No instructions configured for this project.</div>'}
+        <div class="row" style="gap:8px;margin-top:10px">
+          <button class="btn btn-primary btn-sm" id="verifMarkVerified">✓ Mark Verified</button>
+          <button class="btn btn-light btn-sm" id="verifReject" style="color:#dc2626">Reject</button>
+        </div></div>`;
+    }
+    return `<div class="page-sub" style="margin-top:10px">🔍 Awaiting verification — assigned to <b>${esc(agentName(t.assigned_to))}</b></div>`;
+  }
+  return '';
+}
+
+function verifWireTicketControls(t){
+  const sendBtn = $('#verifSend');
+  if(sendBtn) sendBtn.onclick=(e)=>{
+    e.stopPropagation();
+    const picked = verifPickVerifier(t.project_id);
+    if(!picked) return;
+    t._verifyMeta = { prevAssignee:t.assigned_to, prevAssigneeName:t.assigned_name||agentName(t.assigned_to) };
+    const oldStatus=t.ticket_status;
+    t.assigned_to=picked.email; t.assigned_name=agentName(picked.email);
+    t.ticket_status='VERIFY';
+    t.history_audit=t.history_audit||[];
+    t.history_audit.unshift({field:'verification_sent', old:statusLabel(oldStatus), neu:agentName(picked.email), by:CURRENT_USER.email, at:new Date()});
+    LOGS.unshift({at:new Date(),ticket:t.ticket_number,event:'VERIFICATION_SENT',actor:CURRENT_USER.name,detail:`Sent for verification → ${agentName(picked.email)}`});
+    toast('🔍 Sent for Verification', picked.fellBack?`${agentName(picked.email)} (all verifiers unavailable)`:agentName(picked.email));
+    paintListKeepScroll();
+  };
+  const mvBtn = $('#verifMarkVerified');
+  if(mvBtn) mvBtn.onclick=(e)=>{
+    e.stopPropagation();
+    t.history_audit=t.history_audit||[];
+    t.history_audit.unshift({field:'verification_result', neu:'Verified', by:CURRENT_USER.email, at:new Date()});
+    t.ticket_status='RESOLVED';
+    LOGS.unshift({at:new Date(),ticket:t.ticket_number,event:'VERIFIED',actor:CURRENT_USER.name,detail:'Ticket verified'});
+    toast('✓ Marked Verified', t.ticket_number);
+    paintListKeepScroll();
+  };
+  const rjBtn = $('#verifReject');
+  if(rjBtn) rjBtn.onclick=(e)=>{ e.stopPropagation(); verifOpenRejectModal(t); };
+}
+
+function verifOpenRejectModal(t){
+  let reason='', note='';
+  const prevName = t._verifyMeta ? t._verifyMeta.prevAssigneeName : 'the agent';
+  openModal(`<div class="modal-head"><div class="mh-ico">↩️</div><h2>Reject Verification</h2><button class="modal-close" data-close>×</button></div>
+    <div class="modal-body">
+      <label class="lbl">Reason <span class="req">*</span></label>
+      <select class="select" id="vjReason"><option value="">Select Reason</option>${VERIF_REJECT_REASONS.map(r=>`<option>${esc(r)}</option>`).join('')}</select>
+      <label class="lbl" style="margin-top:16px">Notes for ${esc(prevName)} <span class="req">*</span> (Min 20 characters)</label>
+      <textarea class="field" id="vjNote" rows="4" placeholder="What needs to be fixed before this can be verified again..."></textarea>
+      <div class="hint" id="vjCount">0 / 20 characters minimum</div>
+    </div>
+    <div class="modal-foot"><div class="spacer"></div>
+      <button class="btn btn-light" data-close>Cancel</button>
+      <button class="btn btn-primary" id="vjConfirm" disabled>Reject</button></div>`, 560);
+  $$('[data-close]').forEach(b=>b.onclick=closeModal);
+  const sync=()=>{ $('#vjConfirm').disabled=!(reason && note.trim().length>=20); };
+  $('#vjReason').onchange=e=>{reason=e.target.value;sync();};
+  $('#vjNote').oninput=e=>{note=e.target.value;$('#vjCount').textContent=`${note.trim().length} / 20 characters minimum`;sync();};
+  $('#vjConfirm').onclick=()=>{
+    const prev = t._verifyMeta || {prevAssignee:t.assigned_to, prevAssigneeName:t.assigned_name};
+    t.assigned_to=prev.prevAssignee; t.assigned_name=prev.prevAssigneeName;
+    t.ticket_status='INPROGRESS';
+    t.history_audit=t.history_audit||[];
+    t.history_audit.unshift({field:'verification_result', neu:'Rejected', by:CURRENT_USER.email, at:new Date(), reason, note});
+    LOGS.unshift({at:new Date(),ticket:t.ticket_number,event:'VERIFICATION_REJECTED',actor:CURRENT_USER.name,detail:`Rejected: ${reason}`});
+    closeModal();
+    toast('↩️ Verification Rejected', `Back to ${prev.prevAssigneeName}`);
+    paintListKeepScroll();
+  };
+}
+
+// Project Configuration UI: eligible verifiers + instructions (appended after Escalation Matrix)
+function verifProjectSectionHTML(projectId){
+  if(!projectId){
+    return `<div class="fsection" style="border-top:1px solid var(--line-2)">
+      <div class="fsection-head"><div class="fs-ico violet">🔍</div><h3>Verification</h3></div>
+      <div class="page-sub">Save the project first to configure verification.</div></div>`;
+  }
+  const cfg = VERIF_CONFIG[projectId] || (VERIF_CONFIG[projectId] = {verifiers:[], instructions:''});
+  return `<div class="fsection" style="border-top:1px solid var(--line-2)">
+    <div class="fsection-head"><div class="fs-ico violet">🔍</div><h3>Verification</h3></div>
+    <label class="lbl">Eligible Verifiers</label>
+    <select class="select" id="verifPicker"><option value="">Add verifier</option>${AGENTS.map(a=>`<option value="${a.email}">${a.name}</option>`).join('')}</select>
+    <div class="sel-box" id="verifPickerBox" style="margin-top:8px"></div>
+    <label class="lbl" style="margin-top:14px">Verification Instructions</label>
+    <textarea class="field" id="verifInstructions" rows="3" placeholder="What should the verifier check before signing off?">${esc(cfg.instructions)}</textarea>
+  </div>`;
+}
+function verifWireProjectSection(projectId){
+  if(!projectId) return;
+  const cfg = VERIF_CONFIG[projectId] || (VERIF_CONFIG[projectId] = {verifiers:[], instructions:''});
+  const box = $('#verifPickerBox');
+  if(!box) return;
+  const renderChips=()=>{
+    box.innerHTML = cfg.verifiers.map(em=>`<span class="sel-chip">${esc(agentName(em))} <button data-verifrm="${esc(em)}">×</button></span>`).join('') || '<span class="hint">None selected</span>';
+    $$('#verifPickerBox [data-verifrm]').forEach(b=>b.onclick=()=>{ cfg.verifiers=cfg.verifiers.filter(x=>x!==b.dataset.verifrm); renderChips(); });
+  };
+  renderChips();
+  $('#verifPicker').onchange=e=>{ if(e.target.value && !cfg.verifiers.includes(e.target.value)){ cfg.verifiers.push(e.target.value); renderChips(); } e.target.value=''; };
+  $('#verifInstructions').oninput=e=>{ cfg.instructions=e.target.value; };
+}
+/* ============================================================ END VERIF_FEATURE ============================================================ */
+
+/* ============================================================ OPS_ADMIN_HANDOFF
+   Ops can't call customers — only a Ticket Admin (fixed pool, TICKET_ADMINS in
+   data.js) can. Ops investigates and leaves internal comments, but routinely
+   forgets to hand the ticket to an Admin once they've worked out next steps.
+   Rather than a separate action to remember, the moment an Ops user saves an
+   internal comment we ask right there whether to hand the ticket off. This is
+   a one-way relay (Ops → Admin → resolved) — no review/reject round-trip like
+   VERIF_FEATURE, no new ticket status, no per-project pool config (the admin
+   pool is fixed and global). The resulting reassignment is logged with the
+   same generic 'assigned_to' history field as any other reassignment — no
+   special-cased history entry. REMOVABLE: this block, plus the single call
+   in the comments-tab #addComment handler. ============================================================ */
+function opsIsCurrentUserAdmin(){ return TICKET_ADMINS.includes(CURRENT_USER.email); }
+function opsOpenHandoffPrompt(t){
+  openModal(`<div class="modal-head"><div class="mh-ico">🔀</div><h2>Assign this ticket?</h2><button class="modal-close" data-close>×</button></div>
+    <div class="modal-body"><p style="margin:0;color:var(--ink-2)">You just added an internal comment. Do you want to assign this ticket to a Ticket Admin now?</p></div>
+    <div class="modal-foot"><div class="spacer"></div><button class="btn btn-light" id="opsNo">No, just save the comment</button><button class="btn btn-primary" id="opsYes">Yes, assign</button></div>`, 460);
+  $$('[data-close]').forEach(b=>b.onclick=closeModal);
+  $('#opsNo').onclick=closeModal;
+  $('#opsYes').onclick=()=>opsRenderAssignStep(t);
+}
+function opsRenderAssignStep(t){
+  let picked='';
+  $('#modalRoot .modal').innerHTML=`<div class="modal-head"><div class="mh-ico">🔀</div><h2>Assign to Admin</h2><button class="modal-close" data-close>×</button></div>
+    <div class="modal-body">
+      <label class="lbl">Assign To <span class="req">*</span></label>
+      <select class="select" id="opsAdminSelect"><option value="">Select Admin</option>${TICKET_ADMINS.map(email=>`<option value="${email}">${esc(agentName(email))}</option>`).join('')}</select>
+    </div>
+    <div class="modal-foot"><div class="spacer"></div><button class="btn btn-light" data-close>Cancel</button><button class="btn btn-primary" id="opsAssignSave" disabled>Save</button></div>`;
+  $$('[data-close]').forEach(b=>b.onclick=closeModal);
+  $('#opsAdminSelect').onchange=e=>{ picked=e.target.value; $('#opsAssignSave').disabled=!picked; };
+  $('#opsAssignSave').onclick=()=>{
+    const oldName = t.assigned_name||'—';
+    t.assigned_to=picked; t.assigned_name=agentName(picked);
+    pushHistory(t,'assigned_to',oldName,t.assigned_name);
+    LOGS.unshift({at:new Date(),ticket:t.ticket_number,event:'OPS_HANDOFF',actor:CURRENT_USER.name,detail:`Assigned to ${agentName(picked)} after internal comment`});
+    closeModal();
+    toast('Assigned to Admin', agentName(picked));
+    paintListKeepScroll();
+  };
+}
+/* ============================================================ END OPS_ADMIN_HANDOFF ============================================================ */
 
 /* ============================================================ TICKET DETAIL (inline accordion) */
 let detailTab='description';
@@ -1839,7 +2039,9 @@ function ticketDetailHTML(t){
         <select class="select" id="dvStatus">${ENUM.status.map(s=>`<option value="${s}" ${t.ticket_status===s?'selected':''}>${statusLabel(s)}</option>`).join('')}</select>
         <select class="select" id="dvStoreAssign"><option value="">Select Store</option>${STORES.map(s=>`<option value="${s.id}" ${t.store===s.id?'selected':''}>${esc(s.name)} · ${esc(s.city)}</option>`).join('')}</select>
         <input type="date" class="select" id="dvDue" value="${t.due_date?t.due_date.toISOString().slice(0,10):''}">
+        ${/* VERIF_FEATURE hook */ verifSendButtonHTML(t)}
       </div>
+      ${/* VERIF_FEATURE hook */ verifStatusPanelHTML(t)}
       <div class="row" style="justify-content:space-between;margin-top:12px">${slaPill(t)}<span class="page-sub">Created: ${fmtDT(t.created_at)}</span></div>
     </div>
 
@@ -1893,9 +2095,9 @@ function wireDetail(t){
     if(nw==='RESOLVED'){ openResolveCloseModal(t,'resolve',old,e.target); return; }
     if(nw==='CLOSED'){ openResolveCloseModal(t,'close',old,e.target); return; }
     transitionStatus(t,old,nw);Array.from(e.target.options).forEach(opt=>{opt.selected=opt.value===nw;});paintListKeepScroll();};
-  $('#dvAssignee').onchange=e=>{t.assigned_to=e.target.value;t.assigned_name=agentName(e.target.value);pushHistory(t,'assigned_to','—',t.assigned_name);toast('👤 Reassigned',t.assigned_name);LOGS.unshift({at:new Date(),ticket:t.ticket_number,event:'ASSIGNED',actor:'Rahul Ukey',detail:'Assigned to '+t.assigned_name});};
+  $('#dvAssignee').onchange=e=>{const old=t.assigned_name||'—';t.assigned_to=e.target.value;t.assigned_name=agentName(e.target.value);pushHistory(t,'assigned_to',old,t.assigned_name);toast('👤 Reassigned',t.assigned_name);LOGS.unshift({at:new Date(),ticket:t.ticket_number,event:'ASSIGNED',actor:CURRENT_USER.name,detail:'Assigned to '+t.assigned_name});};
   if($('#dvAssignMe')) $('#dvAssignMe').onclick=(e)=>{e.stopPropagation();const old=t.assigned_name||'—';t.assigned_to=CURRENT_USER.email;t.assigned_name=CURRENT_USER.name;pushHistory(t,'assigned_to',old,CURRENT_USER.name);LOGS.unshift({at:new Date(),ticket:t.ticket_number,event:'ASSIGNED',actor:CURRENT_USER.name,detail:'Self-assigned to '+CURRENT_USER.name});paintListKeepScroll();toast('🙋 Self-Assigned','Now assigned to you');};
-  if($('#dvStoreAssign')) $('#dvStoreAssign').onchange=e=>{const store=STORES.find(s=>s.id===e.target.value);t.store=e.target.value||null;t.storeName=store?store.name:null;t.location=store?store.address:null;t.city=store?store.city:null;t.state=store?store.state:null;t.zone=store?store.zone:null;pushHistory(t,'store','—',t.storeName||'—');toast('📍 Store Updated',t.storeName||'Cleared');};
+  if($('#dvStoreAssign')) $('#dvStoreAssign').onchange=e=>{const old=t.storeName||'—';const store=STORES.find(s=>s.id===e.target.value);t.store=e.target.value||null;t.storeName=store?store.name:null;t.location=store?store.address:null;t.city=store?store.city:null;t.state=store?store.state:null;t.zone=store?store.zone:null;pushHistory(t,'store',old,t.storeName||'—');toast('📍 Store Updated',t.storeName||'Cleared');};
   $('#dvDue').onchange=e=>{t.due_date=new Date(e.target.value);t.is_overdue=t.due_date<new Date();toast('📅 Due Date Updated',fmtDT(t.due_date));};
   $('#editTitle').onclick=()=>{const v=prompt('Edit ticket title',t.title);if(v&&v.trim()){t.title=v.trim();paintListKeepScroll();toast('✏️ Title Updated',v.trim());}};
   $('#replyBtn').onclick=()=>openReplyModal(t);
@@ -1905,7 +2107,8 @@ function wireDetail(t){
   $('#dvCollab').onchange=e=>{if(e.target.value&&!collab.includes(e.target.value)){collab.push(e.target.value);$('#collabChips').innerHTML=collab.map(c=>`<span class="sel-chip"><span style="display:inline-flex;align-items:center;gap:6px"><span class="avatar" style="width:24px;height:24px;font-size:10px;font-weight:700">${initials(agentName(c))}<span class="status-dot ${getAgentStatusDotClass(c)}"></span></span>${esc(agentName(c))}</span></span>`).join('');}e.target.value='';};
   $('#dvGroup').onchange=e=>{if(e.target.value&&!groups.includes(e.target.value)){groups.push(e.target.value);$('#groupChips').innerHTML=groups.map(g=>`<span class="sel-chip">${esc(g)}</span>`).join('');}e.target.value='';};
   $('#dvAddFile').onclick=()=>$('#dvFileInput').click();
-  $('#dvFileInput').onchange=e=>{[...e.target.files].forEach(f=>{t.attachments=t.attachments||[];t.attachments.push({attachment_id:'att_'+Date.now(),filename:f.name,size_bytes:f.size,mime_type:f.type||'application/octet-stream',uploaded_by:'rahul.ukey@karnival.com',uploaded_at:new Date()});});paintListKeepScroll();toast('Attachment added');};
+  $('#dvFileInput').onchange=e=>{[...e.target.files].forEach(f=>{t.attachments=t.attachments||[];t.attachments.push({attachment_id:'att_'+Date.now(),filename:f.name,size_bytes:f.size,mime_type:f.type||'application/octet-stream',uploaded_by:CURRENT_USER.email,uploaded_at:new Date()});});paintListKeepScroll();toast('Attachment added');};
+  verifWireTicketControls(t); /* VERIF_FEATURE hook */
   $$('.tab').forEach(tab=>tab.onclick=()=>{detailTab=tab.dataset.tab;$$('.tab').forEach(x=>x.classList.toggle('active',x===tab));paintTab(t);});
   // Collapse: click the 💬 ticket icon, or the card header/chrome (not a nested sub-card or control)
   if($('#collapseIco')) $('#collapseIco').onclick=(e)=>{e.stopPropagation();go('tickets');};
@@ -1979,8 +2182,8 @@ function openBulkAssignConfirm(list, email, name, isGroup){
 }
 function bulkAssign(list, email, name, isGroup){
   if(!list.length) return;
-  list.forEach(t=>{ if(isGroup){ t.group_assigned_to=name; pushHistory(t,'group_assigned_to','—',name); }
-    else { t.assigned_to=email; t.assigned_name=name; pushHistory(t,'assigned_to','—',name); }
+  list.forEach(t=>{ if(isGroup){ const old=t.group_assigned_to||'—'; t.group_assigned_to=name; pushHistory(t,'group_assigned_to',old,name); }
+    else { const old=t.assigned_name||'—'; t.assigned_to=email; t.assigned_name=name; pushHistory(t,'assigned_to',old,name); }
     LOGS.unshift({at:new Date(),ticket:t.ticket_number,event:'ASSIGNED',actor:CURRENT_USER.name,detail:`${isGroup?'Group ':''}Assigned to ${name} (bulk)`}); });
   toast(`${isGroup?'👥':'👤'} Bulk Assigned`,`${list.length} ticket(s) → ${name}`); state.selected.clear(); paintListKeepScroll();
 }
@@ -2029,7 +2232,7 @@ function openBulkResolveClose(list, mode){
     toast(`${list.length} ticket(s) ${isResolve?'resolved':'closed'}`,`${reason} · ${category}`);
   };
 }
-function pushHistory(t,field,old,neu){t.history_audit=t.history_audit||[];t.history_audit.unshift({field,old,neu,by:'rahul.ukey@karnival.com',at:new Date()});t.updated_at=new Date();}
+function pushHistory(t,field,old,neu){t.history_audit=t.history_audit||[];t.history_audit.unshift({field,old,neu,by:CURRENT_USER.email,at:new Date()});t.updated_at=new Date();}
 function paintTab(t){
   const b=$('#tabBody'); if(!b) return;
   if(detailTab==='description'){
@@ -2056,10 +2259,11 @@ function paintTab(t){
     $('#cancelComment').onclick=()=>{ta.value='';$('#newCommentCount').textContent='0/4000 characters';};
     $('#addComment').onclick=()=>{const text=ta.value.trim();if(!text){toast('Empty comment','Type something first','warn');return;}
       const mentions=[]; AGENTS.forEach(a=>{ if(text.includes('@'+a.name)) mentions.push(a.name); });
-      t.comments=t.comments||[];t.comments.push({author:'Rahul Ukey',email:'rahul.ukey@karnival.com',text,internal:mode==='internal',at:new Date(),mentions});
-      pushHistory(t,'comment','—',mode==='internal'?'internal note':'public reply');
-      LOGS.unshift({at:new Date(),ticket:t.ticket_number,event:'COMMENT_ADDED',actor:'Rahul Ukey',detail:(mode==='internal'?'Internal':'Public')+' comment added'});
-      paintListKeepScroll();toast('Comment saved',mentions.length?`Notified ${mentions.length} mention(s)`:'');};
+      t.comments=t.comments||[];t.comments.push({author:CURRENT_USER.name,email:CURRENT_USER.email,text,internal:mode==='internal',at:new Date(),mentions});
+      t.updated_at=new Date();
+      LOGS.unshift({at:new Date(),ticket:t.ticket_number,event:'COMMENT_ADDED',actor:CURRENT_USER.name,detail:(mode==='internal'?'Internal':'Public')+' comment added'});
+      paintListKeepScroll();toast('Comment saved',mentions.length?`Notified ${mentions.length} mention(s)`:'');
+      if(mode==='internal' && !opsIsCurrentUserAdmin()) opsOpenHandoffPrompt(t); /* OPS_ADMIN_HANDOFF hook */};
   } else {
     b.innerHTML=`<div style="font-weight:700;margin-bottom:16px">Change History</div>
       ${historyEntries(t).map(h=>`<div class="hist-item">
@@ -2080,6 +2284,15 @@ function historyEntries(t){
       items.push({at:h.at, actor:h.by, actorName:agentName(h.by)||h.by, badge: h.field==='resolution'?'Resolved':'Closed',
         html:`<b>Reason:</b> ${esc(h.reason)} &nbsp;·&nbsp; <b>Category:</b> ${esc(h.category)}${h.note?`<div class="c-body" style="margin-top:6px">${esc(h.note)}</div>`:''}`});
       return; }
+    /* VERIF_FEATURE hook */
+    if(h.field==='verification_sent'){
+      items.push({at:h.at, actor:h.by, actorName:agentName(h.by)||h.by, badge:'Sent for Verification',
+        html:`<b>Sent for Verification</b> → ${esc(h.neu)}`});
+      return; }
+    if(h.field==='verification_result'){
+      items.push({at:h.at, actor:h.by, actorName:agentName(h.by)||h.by, badge: h.neu==='Verified'?'Verified':'Verification Rejected',
+        html: h.neu==='Verified' ? `Ticket verified` : `<b>Rejected:</b> ${esc(h.reason)}${h.note?`<div class="c-body" style="margin-top:6px">${esc(h.note)}</div>`:''}`});
+      return; }
     const label = h.field==='assigned_to'?'Assigned':h.field==='group_assigned_to'?'Group':titleCase(h.field);
     items.push({at:h.at, actor:h.by, actorName:agentName(h.by)||h.by, badge:'', html:`<b>${esc(label)}:</b> ${pill(h.old)} → ${pill(h.neu)}`}); });
   items.push({at:t.created_at, actor:t.created_by, actorName:t.created_by, badge:'', html:`${t.created_by==='Auto Created'?'Ticket Auto-created':'Ticket created'}${t.assigned_name?`<div style="margin-top:6px"><b>Assigned:</b> ${pill('N/A')} → ${pill(t.assigned_name)}</div>`:''}`});
@@ -2087,8 +2300,9 @@ function historyEntries(t){
 }
 function pj2(t){return PROJECTS.find(p=>p.project_id===t.project_id)||PROJECTS[0];}
 function commentHTML(c){return `<div class="comment"><div class="avatar">${initials(c.author)}<span class="status-dot ${getAgentStatusDotClass(c.email)}"></span></div>
-  <div style="flex:1"><div class="c-head"><span class="c-author">${esc(c.author)}</span><span class="c-time">${fmtDateAbs(c.at)}</span></div>
-  <div class="c-body">${renderMentions(c.text)}</div></div></div>`;}
+  <div style="flex:1"><div class="c-head"><span class="c-author">${esc(c.author)}</span><span class="c-internal">${c.internal?'Internal':'Public'}</span><span class="c-time">${fmtDateAbs(c.at)}</span></div>
+  <div class="c-body">${renderMentions(c.text)}</div>
+  ${(c.tags&&c.tags.length)?`<div class="c-tags">${c.tags.map(tg=>`<span class="mini-tag">${esc(tg)}</span>`).join('')}</div>`:''}</div></div>`;}
 
 /* Resolve / Close ticket modal — required when status → RESOLVED or CLOSED (manual & auto tickets) */
 function openResolveCloseModal(t, mode, oldStatus, selectEl){
@@ -2177,8 +2391,8 @@ function openReplyModal(t){
   $('#rChannel').onchange=e=>{channel=e.target.value;$('#rSubjWrap').style.display=channel==='EMAIL'?'block':'none';};
   $('#rSend').onclick=()=>{const body=$('#rBody').value.trim();if(!body){toast('Empty message','','warn');return;}
     t.communication_audit=t.communication_audit||[];
-    t.communication_audit.push({channel,direction:'OUT',at:new Date(),party:t.customer_info?.email||t.customer_info?.phone||'customer',subject:channel==='EMAIL'?$('#rSubject').value:'',body,by:'rahul.ukey@karnival.com'});
-    LOGS.unshift({at:new Date(),ticket:t.ticket_number,event:'COMMUNICATION_SENT',actor:'Rahul Ukey',detail:`${titleCase(channel)} sent to ${t.customer_info?.email||'customer'}`});
+    t.communication_audit.push({channel,direction:'OUT',at:new Date(),party:t.customer_info?.email||t.customer_info?.phone||'customer',subject:channel==='EMAIL'?$('#rSubject').value:'',body,by:CURRENT_USER.email});
+    LOGS.unshift({at:new Date(),ticket:t.ticket_number,event:'COMMUNICATION_SENT',actor:CURRENT_USER.name,detail:`${titleCase(channel)} sent to ${t.customer_info?.email||'customer'}`});
     closeModal();paintListKeepScroll();toast('Reply sent','via '+titleCase(channel));};
 }
 
@@ -2235,74 +2449,662 @@ function paintConv(){
   $('#chBtn').onclick=()=>$('#chMenu').classList.toggle('show');
   $$('#chMenu button').forEach(b=>b.onclick=()=>{supportChannel=b.dataset.ch;$('#chLabel').textContent=supportChannel;$('#sendVia').textContent='Send via '+supportChannel;$('#chMenu').classList.remove('show');});
   const send=()=>{const v=$('#convInput').value.trim();if(!v)return;const ch=supportChannel.toUpperCase()==='WHATSAPP'?'WHATSAPP':supportChannel.toUpperCase();
-    t.communication_audit=t.communication_audit||[];t.communication_audit.push({channel:ch,direction:'OUT',at:new Date(),party:c.email||c.phone||'customer',body:v,by:'rahul.ukey@karnival.com'});
-    LOGS.unshift({at:new Date(),ticket:t.ticket_number,event:'COMMUNICATION_SENT',actor:'Rahul Ukey',detail:`${titleCase(ch)} sent`});paintConv();toast('Message sent','via '+supportChannel);};
+    t.communication_audit=t.communication_audit||[];t.communication_audit.push({channel:ch,direction:'OUT',at:new Date(),party:c.email||c.phone||'customer',body:v,by:CURRENT_USER.email});
+    LOGS.unshift({at:new Date(),ticket:t.ticket_number,event:'COMMUNICATION_SENT',actor:CURRENT_USER.name,detail:`${titleCase(ch)} sent`});paintConv();toast('Message sent','via '+supportChannel);};
   $('#convSend').onclick=send; $('#sendVia').onclick=send;
   $('#convInput').onkeydown=e=>{if(e.key==='Enter')send();};
 }
 
-/* ============================================================ PROJECTS */
-function renderProjects(){
-  mount().innerHTML=`<div class="page-head"><div><div class="page-title">Projects</div><div class="page-sub">Configure escalation matrix, collaborators & auto-ticket rules</div></div>
-    <button class="btn btn-primary" id="newProj">＋ New Project</button></div>
-    <div class="proj-grid">${PROJECTS.map(projCard).join('')}</div>`;
-  $('#newProj').onclick=()=>openProjectModal(null);
-  $$('.proj-card [data-edit]').forEach(b=>b.onclick=()=>openProjectModal(b.dataset.edit));
-  $$('.proj-card [data-del]').forEach(b=>b.onclick=()=>{if(confirm('Delete this project?')){const i=PROJECTS.findIndex(p=>p.project_id===b.dataset.del);PROJECTS.splice(i,1);renderProjects();toast('Project deleted','','warn');}});
+/* ============================================================ PROJECTS
+   Rich Projects settings screen, cloned pixel-for-pixel from the live Karnival
+   dashboard's Support Ticket > Settings > Projects screen and merged in here as
+   the "Projects" ticketing sub-tab (router map at the top of this file already
+   points data-route="projects" at renderProjects()). Renders inside the shared
+   sheet body (mount()), exactly like every other ticketing view.
+   VERIF_FEATURE hooks into pjRenderForm via verifProjectSectionHTML/
+   verifWireProjectSection, keyed by project_id — unchanged, to be redesigned
+   in a follow-up pass once this merge is confirmed working. ============================================================ */
+const pjState = {
+  editingId:null,          // project_id being edited, or null for a new project
+  draft:null,
+  isDirty:false,
+  pendingNav:null,
+  openDropdown:null,       // key of currently open dropdown
+  openLogicCollapsed:{},   // logicId -> bool
+  openInfoTip:false,
+  openCollabPopover:null,  // project_id whose collaborators popover is open
+  collapse:{comms:false, escalation:false, notifications:false},
+};
+const PJ_ICONS = {
+  people: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M16 19v-1.5a3.5 3.5 0 0 0-3.5-3.5h-5A3.5 3.5 0 0 0 4 17.5V19"/><circle cx="9" cy="7" r="3"/><path d="M20 19v-1.2a3 3 0 0 0-2.2-2.9"/><path d="M14.5 4.2a3 3 0 0 1 0 5.6"/></svg>',
+  ticket: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v1.5a1.5 1.5 0 0 0 0 3V15a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1.5a1.5 1.5 0 0 0 0-3V9Z"/><path d="M14 7v10" stroke-dasharray="2 2.4"/></svg>',
+  edit: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4.5A1.5 1.5 0 0 1 9.5 3h5A1.5 1.5 0 0 1 16 4.5V6"/><path d="M19 6l-.8 13.2A2 2 0 0 1 16.2 21H7.8a2 2 0 0 1-2-1.8L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>',
+  chevronDown: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>',
+  chevronUp: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg>',
+  chevronLeft: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>',
+  check: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>',
+};
+const PJ_PRIORITIES = [{v:'High',ico:'⬆'},{v:'Medium',ico:'≡'},{v:'Low',ico:'⬇'}];
+function pjAgentChip(email){
+  return `<span style="display:inline-flex;align-items:center;gap:6px"><span class="avatar" style="width:22px;height:22px;font-size:10px;font-weight:700">${initials(agentName(email))}<span class="status-dot ${getAgentStatusDotClass(email)}"></span></span>${esc(agentName(email))}</span>`;
 }
-function projCard(p){return `<div class="proj-card"><div class="row" style="justify-content:space-between"><h4>${esc(p.name)}</h4><span class="tcard-brand">${esc(p.brand)}</span></div>
-  <div class="pc-desc">${esc(p.description||'')}</div>
-  <div class="pc-meta"><div>Tickets<b>${p.ticketCount}</b></div><div>Escalation Levels<b>${p.matrix.length}</b></div><div>Collaborators<b>${p.collaborators.length}</b></div></div>
-  <div style="margin-bottom:12px">${p.matrix.map(m=>`<span class="lvl-pill" style="display:inline-block;padding:4px 10px;margin:0 6px 6px 0">${m.level}: ${m.value}${m.unit[0].toLowerCase()}</span>`).join('')}</div>
-  ${p.creationLogic.length?`<div class="page-sub" style="margin-bottom:12px">⚙️ ${p.creationLogic.length} auto-ticket rule(s)</div>`:''}
-  <div class="pc-actions"><button class="btn btn-light btn-sm" data-edit="${p.project_id}">Edit</button><button class="btn btn-light btn-sm" data-del="${p.project_id}">Delete</button></div></div>`;}
-function openProjectModal(id){
-  const p=id?JSON.parse(JSON.stringify(PROJECTS.find(x=>x.project_id===id))):{project_id:'',brand:BRANDS[0],name:'',description:'',collaborators:[],ticketCount:0,matrix:[{level:'L1',value:2,unit:'HOURS',to:['Supervisor'],channel:'EMAIL'}],creationLogic:[]};
-  const draftP=p;
-  const render=()=>{
-    $('#modalRoot .modal').innerHTML=`<div class="modal-head"><div class="mh-ico">📁</div><h2>${id?'Edit':'New'} Project</h2><button class="modal-close" data-close>×</button></div>
-    <div class="modal-body">
-      <div class="fgrid"><div><label class="lbl">Project Name <span class="req">*</span></label><input class="field" id="pName" value="${esc(draftP.name)}"></div>
-        <div><label class="lbl">Brand <span class="req">*</span></label><select class="select" id="pBrand">${BRANDS.map(b=>`<option ${draftP.brand===b?'selected':''}>${b}</option>`).join('')}</select></div></div>
-      <div style="margin-top:14px"><label class="lbl">Description</label><input class="field" id="pDesc" value="${esc(draftP.description||'')}"></div>
-      <div style="margin-top:14px"><label class="lbl">Collaborators</label><select class="select" id="pCollab"><option value="">Add collaborator</option>${AGENTS.map(a=>`<option value="${a.email}">${a.name}</option>`).join('')}</select>
-        <div class="sel-box" id="pCollabBox" style="margin-top:8px">${draftP.collaborators.map(c=>`<span class="sel-chip">${esc(agentName(c))} <button data-rmc="${c}">×</button></span>`).join('')||'<span class="hint">None</span>'}</div></div>
-      <div class="fsection" style="border-top:1px solid var(--line-2);margin-top:18px">
-        <div class="fsection-head"><div class="fs-ico red">⚡</div><h3>Escalation Matrix</h3></div>
-        <div class="matrix-row matrix-head"><div>Level</div><div>Duration</div><div>Escalate To</div><div>Channel</div><div></div></div>
-        <div id="matrixRows">${draftP.matrix.map((m,i)=>matrixRow(m,i)).join('')}</div>
-        <button class="btn btn-light btn-sm" id="addLevel">＋ Add Level</button>
-      </div>
-    </div>
-    <div class="modal-foot"><div class="spacer"></div><button class="btn btn-light" data-close>Cancel</button><button class="btn btn-primary" id="pSave">${id?'Save Changes':'Create Project'}</button></div>`;
-    wire();
-  };
-  function matrixRow(m,i){return `<div class="matrix-row" data-row="${i}"><div class="lvl-pill">${m.level}</div>
-    <div class="row" style="gap:6px"><input class="field" type="number" value="${m.value}" data-mval="${i}" style="width:70px"><select class="select" data-munit="${i}">${['HOURS','DAYS','MINUTES'].map(u=>`<option ${m.unit===u?'selected':''}>${u}</option>`).join('')}</select></div>
-    <input class="field" value="${esc(m.to.join(', '))}" data-mto="${i}">
-    <select class="select" data-mch="${i}">${['EMAIL','SMS','WHATSAPP'].map(c=>`<option ${m.channel===c?'selected':''}>${c}</option>`).join('')}</select>
-    <button class="btn-ghost" data-mrm="${i}" style="color:#dc2626">×</button></div>`;}
-  function wire(){
+function makeProjectCode(name){ return ((name||'').match(/\b[a-zA-Z]/g)||['P','R','O','J']).slice(0,4).join('').toUpperCase(); }
+function pjRenderFormKeepScroll(){ const sb=$('#sheetBody'); const sc=sb?sb.scrollTop:0; pjRenderForm(); if(sb) sb.scrollTop=sc; }
+
+/* ---------- router entry point + navigation ---------- */
+function renderProjects(){ pjGoList(); }
+function pjGoList(){
+  appUnsavedGuard=null; pjState.editingId=null; pjState.draft=null; pjState.isDirty=false;
+  pjState.openDropdown=null; pjState.openInfoTip=false; // clear form-only UI state so the click-away listener can't crash pjRenderForm() with a null draft
+  pjRenderList();
+}
+function pjGoCreate(){
+  pjState.editingId=null; pjState.draft=emptyProjectDraft(); pjState.isDirty=false;
+  appUnsavedGuard = next=>pjAttemptNav(next);
+  pjRenderForm();
+}
+function pjGoEdit(id){
+  pjState.editingId=id; pjState.draft=JSON.parse(JSON.stringify(PROJECTS.find(p=>p.project_id===id))); pjState.isDirty=false;
+  appUnsavedGuard = next=>pjAttemptNav(next);
+  pjRenderForm();
+}
+function pjMarkDirty(){ pjState.isDirty=true; }
+function pjAttemptNav(fn){
+  if(pjState.isDirty){
+    pjState.pendingNav = fn;
+    openModal(`<div class="modal-head"><div class="mh-ico" style="background:#dc2626">⚠️</div><h2>Unsaved changes!</h2><button class="modal-close" data-close>×</button></div>
+      <div class="modal-body"><p style="margin:0;color:var(--ink-2)">You have unsaved changes. Do you really want to leave this page?</p></div>
+      <div class="modal-foot"><div class="spacer"></div><button class="btn btn-light" data-close>Cancel</button><button class="btn btn-primary" id="pjLeaveBtn" style="background:#dc2626">Leave</button></div>`, 440);
     $$('[data-close]').forEach(b=>b.onclick=closeModal);
-    $('#pName').oninput=e=>draftP.name=e.target.value;
-    $('#pBrand').onchange=e=>draftP.brand=e.target.value;
-    $('#pDesc').oninput=e=>draftP.description=e.target.value;
-    $('#pCollab').onchange=e=>{if(e.target.value&&!draftP.collaborators.includes(e.target.value)){draftP.collaborators.push(e.target.value);render();}};
-    $$('#pCollabBox [data-rmc]').forEach(b=>b.onclick=()=>{draftP.collaborators=draftP.collaborators.filter(x=>x!==b.dataset.rmc);render();});
-    $$('[data-mval]').forEach(el=>el.onchange=()=>draftP.matrix[+el.dataset.mval].value=+el.value);
-    $$('[data-munit]').forEach(el=>el.onchange=()=>draftP.matrix[+el.dataset.munit].unit=el.value);
-    $$('[data-mto]').forEach(el=>el.onchange=()=>draftP.matrix[+el.dataset.mto].to=el.value.split(',').map(s=>s.trim()).filter(Boolean));
-    $$('[data-mch]').forEach(el=>el.onchange=()=>draftP.matrix[+el.dataset.mch].channel=el.value);
-    $$('[data-mrm]').forEach(b=>b.onclick=()=>{draftP.matrix.splice(+b.dataset.mrm,1);render();});
-    $('#addLevel').onclick=()=>{draftP.matrix.push({level:'L'+(draftP.matrix.length+1),value:4,unit:'HOURS',to:[],channel:'EMAIL'});render();};
-    $('#pSave').onclick=()=>{if(!draftP.name.trim()){toast('Name required','','warn');return;}
-      draftP.matrix.forEach((m,i)=>m.level='L'+(i+1));
-      if(id){const idx=PROJECTS.findIndex(x=>x.project_id===id);PROJECTS[idx]=draftP;}
-      else{draftP.project_id='proj_'+Date.now();PROJECTS.push(draftP);}
-      closeModal();renderProjects();toast(id?'Project updated':'Project created',draftP.name);};
-  }
-  openModal('',880); render();
+    $('#pjLeaveBtn').onclick=()=>{
+      closeModal(); pjState.isDirty=false; appUnsavedGuard=null;
+      const next=pjState.pendingNav; pjState.pendingNav=null; if(next) next();
+    };
+  } else fn();
 }
+
+/* ---------- LIST ---------- */
+function pjToggleCollabPopover(id){
+  pjState.openCollabPopover = pjState.openCollabPopover===id ? null : id;
+  const sb=$('#sheetBody'); const sc=sb?sb.scrollTop:0; pjRenderList(); if(sb) sb.scrollTop=sc;
+}
+function pjRenderList(){
+  const rows = PROJECTS.map(p=>`
+    <tr>
+      <td>${esc(p.name)}</td>
+      <td>${esc(p.code)}</td>
+      <td>${p.defaultAssignee?esc(agentName(p.defaultAssignee)):''}</td>
+      <td style="position:relative">
+        <button class="pj-icon-btn" title="${p.collaborators.length} collaborator(s)" data-collab="${p.project_id}">${PJ_ICONS.people}</button>
+        ${pjState.openCollabPopover===p.project_id?`
+        <div class="pj-collab-popover">
+          <div class="pj-collab-head">${p.collaborators.length} Collaborator${p.collaborators.length===1?'':'s'}</div>
+          ${p.collaborators.length?p.collaborators.map(e=>`<div class="pj-collab-item">${pjAgentChip(e)}</div>`).join(''):'<div class="pj-collab-item hint">No collaborators</div>'}
+        </div>`:''}
+      </td>
+      <td>${p.createdBy?esc(agentName(p.createdBy)):''}</td>
+      <td><div class="row" style="gap:4px">
+        <button class="pj-icon-plain" title="View tickets for this project" data-tickets="${p.project_id}">${PJ_ICONS.ticket}</button>
+        <button class="pj-icon-plain" title="Edit project" data-edit="${p.project_id}">${PJ_ICONS.edit}</button>
+      </div></td>
+    </tr>`).join('');
+  mount().innerHTML = `
+    <div class="page-head"><div><div class="page-title">Projects</div><div class="page-sub">Configure escalation levels, auto-ticket logic, communication & notification rules per project</div></div>
+      <button class="btn btn-primary" id="pjNewBtn">＋ Create Project</button></div>
+    <div class="tbl-wrap"><table class="tbl">
+      <thead><tr><th>Project Name</th><th>Code</th><th>Default Assignee</th><th>Collaborators</th><th>Created By</th><th>Action</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    ${!PROJECTS.length?'<div class="hint" style="text-align:center;padding:40px 0">No projects found. Click "Create Project" to add your first one.</div>':''}
+  `;
+  $('#pjNewBtn').onclick=()=>pjGoCreate();
+  $$('[data-collab]').forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); pjToggleCollabPopover(b.dataset.collab); });
+  $$('[data-tickets]').forEach(b=>b.onclick=()=>{ state.filters.project=b.dataset.tickets; go('tickets'); });
+  $$('[data-edit]').forEach(b=>b.onclick=()=>pjGoEdit(b.dataset.edit));
+}
+
+/* ---------- shared dropdowns ---------- */
+function pjToggleDropdown(key){ pjState.openDropdown=(pjState.openDropdown===key?null:key); pjRenderFormKeepScroll(); }
+function pjCloseDropdowns(){ if(pjState.openDropdown){ pjState.openDropdown=null; pjRenderFormKeepScroll(); } }
+
+function pjSingleUserDropdown(key, placeholder, selectedEmail, onPick){
+  const wrap=document.createElement('div'); wrap.className='pj-dd';
+  const btn=document.createElement('button'); btn.type='button'; btn.className='pj-dd-btn';
+  btn.innerHTML = selectedEmail
+    ? `<span>${esc(agentName(selectedEmail))}</span><span class="pj-dd-clear" data-clear>×</span>`
+    : `<span class="pj-ph">${esc(placeholder)}</span><span class="pj-dd-chevron">${PJ_ICONS.chevronDown}</span>`;
+  btn.onclick=(e)=>{ if(e.target.closest('[data-clear]')){ e.stopPropagation(); onPick(''); return; } e.stopPropagation(); pjToggleDropdown(key); };
+  wrap.appendChild(btn);
+  if(pjState.openDropdown===key){
+    const panel=document.createElement('div'); panel.className='pj-dd-panel'; panel.onclick=e=>e.stopPropagation();
+    const search=document.createElement('input'); search.className='pj-dd-search'; search.placeholder='Search user...';
+    panel.appendChild(search);
+    const list=document.createElement('div'); list.className='pj-dd-list';
+    function paint(filter){
+      list.innerHTML='';
+      const opts=AGENTS.filter(a=>a.name.toLowerCase().includes(filter.toLowerCase()));
+      if(!opts.length){ list.innerHTML='<div class="pj-dd-empty">No results found.</div>'; return; }
+      opts.forEach(a=>{
+        const item=document.createElement('div'); item.className='pj-dd-item'+(selectedEmail===a.email?' checked':'');
+        item.innerHTML=`${pjAgentChip(a.email)}${selectedEmail===a.email?`<span class="pj-tick">${PJ_ICONS.check}</span>`:''}`;
+        item.onclick=()=>{ onPick(a.email); pjState.openDropdown=null; pjRenderForm(); };
+        list.appendChild(item);
+      });
+    }
+    paint(''); search.oninput=()=>paint(search.value);
+    panel.appendChild(list); wrap.appendChild(panel);
+  }
+  return wrap;
+}
+function pjMultiUserDropdown(key, placeholder, selectedEmails, onChange){
+  const wrap=document.createElement('div'); wrap.className='pj-dd';
+  const btn=document.createElement('button'); btn.type='button'; btn.className='pj-dd-btn';
+  const label=selectedEmails.map(agentName).join(' , ');
+  btn.innerHTML = selectedEmails.length
+    ? `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(label)}</span><span class="pj-dd-clear" data-clear>×</span>`
+    : `<span class="pj-ph">${esc(placeholder)}</span><span class="pj-dd-chevron">${PJ_ICONS.chevronDown}</span>`;
+  btn.onclick=(e)=>{ if(e.target.closest('[data-clear]')){ e.stopPropagation(); onChange([]); return; } e.stopPropagation(); pjToggleDropdown(key); };
+  wrap.appendChild(btn);
+  if(pjState.openDropdown===key){
+    const panel=document.createElement('div'); panel.className='pj-dd-panel'; panel.onclick=e=>e.stopPropagation();
+    const search=document.createElement('input'); search.className='pj-dd-search'; search.placeholder='Search user...';
+    panel.appendChild(search);
+    const list=document.createElement('div'); list.className='pj-dd-list';
+    function paint(filter){
+      list.innerHTML='';
+      const opts=AGENTS.filter(a=>a.name.toLowerCase().includes(filter.toLowerCase()));
+      if(!opts.length){ list.innerHTML='<div class="pj-dd-empty">No results found.</div>'; return; }
+      opts.forEach(a=>{
+        const checked=selectedEmails.includes(a.email);
+        const item=document.createElement('div'); item.className='pj-dd-item'+(checked?' checked':'');
+        item.innerHTML=`${pjAgentChip(a.email)}${checked?`<span class="pj-tick">${PJ_ICONS.check}</span>`:''}`;
+        item.onclick=()=>{ onChange(checked?selectedEmails.filter(x=>x!==a.email):selectedEmails.concat([a.email])); };
+        list.appendChild(item);
+      });
+    }
+    paint(''); search.oninput=()=>paint(search.value);
+    panel.appendChild(list); wrap.appendChild(panel);
+  }
+  return wrap;
+}
+function pjMultiGroupDropdown(key, placeholder, selectedGroups, onChange){
+  const wrap=document.createElement('div'); wrap.className='pj-dd';
+  const btn=document.createElement('button'); btn.type='button'; btn.className='pj-dd-btn';
+  btn.innerHTML = selectedGroups.length
+    ? `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(selectedGroups.join(' , '))}</span><span class="pj-dd-clear" data-clear>×</span>`
+    : `<span class="pj-ph">${esc(placeholder)}</span><span class="pj-dd-chevron">${PJ_ICONS.chevronDown}</span>`;
+  btn.onclick=(e)=>{ if(e.target.closest('[data-clear]')){ e.stopPropagation(); onChange([]); return; } e.stopPropagation(); pjToggleDropdown(key); };
+  wrap.appendChild(btn);
+  if(pjState.openDropdown===key){
+    const panel=document.createElement('div'); panel.className='pj-dd-panel'; panel.onclick=e=>e.stopPropagation();
+    const list=document.createElement('div'); list.className='pj-dd-list';
+    GROUPS.forEach(g=>{
+      const checked=selectedGroups.includes(g);
+      const item=document.createElement('div'); item.className='pj-dd-item'+(checked?' checked':'');
+      item.innerHTML=`<span>${esc(g)}</span>${checked?`<span class="pj-tick">${PJ_ICONS.check}</span>`:''}`;
+      item.onclick=()=>{ onChange(checked?selectedGroups.filter(x=>x!==g):selectedGroups.concat([g])); };
+      list.appendChild(item);
+    });
+    panel.appendChild(list); wrap.appendChild(panel);
+  }
+  return wrap;
+}
+function pjPlainSelectDropdown(key, options, selectedVal, onPick, renderLabel){
+  const wrap=document.createElement('div'); wrap.className='pj-dd';
+  const btn=document.createElement('button'); btn.type='button'; btn.className='pj-dd-btn';
+  btn.innerHTML=`<span>${renderLabel?renderLabel(selectedVal):esc(selectedVal)}</span><span class="pj-dd-chevron">${PJ_ICONS.chevronDown}</span>`;
+  btn.onclick=(e)=>{ e.stopPropagation(); pjToggleDropdown(key); };
+  wrap.appendChild(btn);
+  if(pjState.openDropdown===key){
+    const panel=document.createElement('div'); panel.className='pj-dd-panel'; panel.onclick=e=>e.stopPropagation();
+    const list=document.createElement('div'); list.className='pj-dd-list';
+    options.forEach(o=>{
+      const checked=o===selectedVal;
+      const item=document.createElement('div'); item.className='pj-dd-item'+(checked?' checked':'');
+      item.innerHTML=`<span>${renderLabel?renderLabel(o):esc(o)}</span>${checked?`<span class="pj-tick">${PJ_ICONS.check}</span>`:''}`;
+      item.onclick=()=>{ onPick(o); pjState.openDropdown=null; pjRenderForm(); };
+      list.appendChild(item);
+    });
+    panel.appendChild(list); wrap.appendChild(panel);
+  }
+  return wrap;
+}
+function pjSearchableDropdown(key, placeholder, options, selectedVal, onPick, groupedLabel){
+  const wrap=document.createElement('div'); wrap.className='pj-dd';
+  const btn=document.createElement('button'); btn.type='button'; btn.className='pj-dd-btn';
+  const opt=options.find(o=>o.value===selectedVal);
+  btn.innerHTML = opt
+    ? `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(opt.label)}</span><span class="pj-dd-chevron">${PJ_ICONS.chevronDown}</span>`
+    : `<span class="pj-ph">${esc(placeholder)}</span><span class="pj-dd-chevron">${PJ_ICONS.chevronDown}</span>`;
+  btn.onclick=(e)=>{ e.stopPropagation(); pjToggleDropdown(key); };
+  wrap.appendChild(btn);
+  if(pjState.openDropdown===key){
+    const panel=document.createElement('div'); panel.className='pj-dd-panel'; panel.onclick=e=>e.stopPropagation();
+    const search=document.createElement('input'); search.className='pj-dd-search'; search.placeholder='Search';
+    panel.appendChild(search);
+    const list=document.createElement('div'); list.className='pj-dd-list';
+    function paint(filter){
+      list.innerHTML='';
+      const opts=options.filter(o=>o.label.toLowerCase().includes(filter.toLowerCase()));
+      if(!opts.length){ list.innerHTML='<div class="pj-dd-empty">No results found.</div>'; return; }
+      let lastGroup=null;
+      opts.forEach(o=>{
+        if(groupedLabel && o.group!==lastGroup){
+          lastGroup=o.group;
+          const gh=document.createElement('div'); gh.style.cssText='font-size:11px;font-weight:700;color:var(--muted);padding:8px 10px 2px;'; gh.textContent=o.group;
+          list.appendChild(gh);
+        }
+        const checked=o.value===selectedVal;
+        const item=document.createElement('div'); item.className='pj-dd-item'+(checked?' checked':'');
+        item.innerHTML=`<span>${esc(o.label)}</span>${checked?`<span class="pj-tick">${PJ_ICONS.check}</span>`:''}`;
+        item.onclick=()=>{ onPick(o.value); pjState.openDropdown=null; pjRenderForm(); };
+        list.appendChild(item);
+      });
+    }
+    paint(''); search.oninput=()=>paint(search.value);
+    panel.appendChild(list); wrap.appendChild(panel);
+  }
+  return wrap;
+}
+function pjMultiOptionsDropdown(key, placeholder, options, selected, onChange){
+  const wrap=document.createElement('div'); wrap.className='pj-dd';
+  const btn=document.createElement('button'); btn.type='button'; btn.className='pj-dd-btn';
+  btn.innerHTML = selected.length
+    ? `<span>${esc(selected.join(', '))}</span><span class="pj-dd-chevron">${PJ_ICONS.chevronDown}</span>`
+    : `<span class="pj-ph">${esc(placeholder)}</span><span class="pj-dd-chevron">${PJ_ICONS.chevronDown}</span>`;
+  btn.onclick=(e)=>{ e.stopPropagation(); pjToggleDropdown(key); };
+  wrap.appendChild(btn);
+  if(pjState.openDropdown===key){
+    const panel=document.createElement('div'); panel.className='pj-dd-panel'; panel.onclick=e=>e.stopPropagation();
+    const list=document.createElement('div'); list.className='pj-dd-list';
+    options.forEach(o=>{
+      const checked=selected.includes(o);
+      const item=document.createElement('div'); item.className='pj-dd-item'+(checked?' checked':'');
+      item.innerHTML=`<span>${esc(o)}</span>${checked?`<span class="pj-tick">${PJ_ICONS.check}</span>`:''}`;
+      item.onclick=()=>{ onChange(checked?selected.filter(x=>x!==o):selected.concat([o])); };
+      list.appendChild(item);
+    });
+    panel.appendChild(list); wrap.appendChild(panel);
+  }
+  return wrap;
+}
+
+/* ---------- escalation levels (reused by the project itself and by each Logic block) ---------- */
+function pjRenderEscalationLevels(levels, keyPrefix){
+  const box=document.createElement('div');
+  const lbl=document.createElement('div'); lbl.className='lbl'; lbl.style.marginTop='18px'; lbl.textContent='Escalation Levels';
+  box.appendChild(lbl);
+  if(levels.length){
+    const table=document.createElement('table'); table.className='pj-esc-table';
+    table.innerHTML=`<thead><tr><th></th><th>Escalate After</th><th>Time Unit</th><th>Escalate To</th><th>Group Escalate To</th><th>Targeted Escalation</th><th></th></tr></thead>`;
+    const tbody=document.createElement('tbody');
+    levels.forEach((lvl,i)=>{
+      const tr=document.createElement('tr');
+      const tdLabel=document.createElement('td'); tdLabel.className='pj-esc-lvl-label'; tdLabel.textContent=lvl.level;
+      const tdAfter=document.createElement('td');
+      const inp=document.createElement('input'); inp.type='number'; inp.className='field pj-num'; inp.value=lvl.after; inp.min=0;
+      inp.oninput=()=>{ lvl.after=+inp.value; pjMarkDirty(); };
+      tdAfter.appendChild(inp);
+      const tdUnit=document.createElement('td');
+      tdUnit.appendChild(pjPlainSelectDropdown(keyPrefix+'unit'+i, TIME_UNITS, lvl.unit, v=>{ lvl.unit=v; pjMarkDirty(); }));
+      const tdTo=document.createElement('td');
+      tdTo.appendChild(pjMultiUserDropdown(keyPrefix+'to'+i, 'Select User', lvl.escalateTo, v=>{ lvl.escalateTo=v; pjMarkDirty(); pjRenderForm(); }));
+      const tdGroup=document.createElement('td');
+      tdGroup.appendChild(pjMultiGroupDropdown(keyPrefix+'grp'+i, 'Select Group', lvl.groupEscalateTo, v=>{ lvl.groupEscalateTo=v; pjMarkDirty(); pjRenderForm(); }));
+      const tdTarget=document.createElement('td');
+      const cb=document.createElement('div'); cb.className='pj-chk'+(lvl.targeted?' on':''); cb.innerHTML=lvl.targeted?PJ_ICONS.check:'';
+      cb.onclick=()=>{ lvl.targeted=!lvl.targeted; pjMarkDirty(); pjRenderForm(); };
+      tdTarget.appendChild(cb);
+      const tdDel=document.createElement('td');
+      const del=document.createElement('button'); del.className='pj-trash'; del.innerHTML=PJ_ICONS.trash; del.title='Remove level';
+      del.onclick=()=>{ levels.splice(i,1); levels.forEach((l,idx)=>l.level='Project Level '+(idx+1)); pjMarkDirty(); pjRenderForm(); };
+      tdDel.appendChild(del);
+      tr.append(tdLabel,tdAfter,tdUnit,tdTo,tdGroup,tdTarget,tdDel);
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody); box.appendChild(table);
+  }
+  const addRow=document.createElement('div'); addRow.style.cssText='display:flex;align-items:center;gap:10px;margin-top:14px;position:relative';
+  const addBtn=document.createElement('button'); addBtn.className='btn btn-primary btn-sm'; addBtn.textContent='+ Add Escalation Level';
+  addBtn.onclick=()=>{ levels.push(emptyEscLevel(levels.length+1)); pjMarkDirty(); pjRenderForm(); };
+  const info=document.createElement('span'); info.className='pj-info-ico'; info.textContent='i';
+  info.onclick=(e)=>{ e.stopPropagation(); pjState.openInfoTip = pjState.openInfoTip===keyPrefix ? false : keyPrefix; pjRenderForm(); };
+  addRow.append(addBtn, info);
+  if(pjState.openInfoTip===keyPrefix){
+    const tip=document.createElement('div'); tip.className='pj-info-tip';
+    tip.textContent='Specify how long to wait before notifying an additional user or team if this ticket remains unresolved.';
+    addRow.appendChild(tip);
+  }
+  box.appendChild(addRow);
+  return box;
+}
+
+/* ---------- Logic blocks (auto-ticket-creation rules, with OR-condition groups) ---------- */
+function pjRenderConditionRow(cond, survey, onRemove){
+  const wrap=document.createElement('div'); wrap.className='pj-cond-row';
+  const grid=document.createElement('div'); grid.className='pj-cond-grid';
+  const qOptions = survey ? survey.questions.map(q=>({value:q.id, label:q.text, group:q.page})) : [];
+  const qCol=document.createElement('div'); qCol.innerHTML='<label class="lbl" style="font-size:12.5px">Question</label>';
+  qCol.appendChild(pjSearchableDropdown('cond-q-'+cond._key, 'Select Question', qOptions, cond.question, v=>{ cond.question=v; cond.selType=''; cond.options=[]; pjMarkDirty(); }, true));
+  const tCol=document.createElement('div'); tCol.innerHTML='<label class="lbl" style="font-size:12.5px">Selection Type</label>';
+  tCol.appendChild(pjSearchableDropdown('cond-t-'+cond._key, 'Select Type', SELECTION_TYPES.map(t=>({value:t,label:t})), cond.selType, v=>{ cond.selType=v; cond.options=[]; pjMarkDirty(); }));
+  grid.append(qCol, tCol);
+  if(cond.selType==='SELECTED' || cond.selType==='UNSELECTED'){
+    const q = survey ? survey.questions.find(x=>x.id===cond.question) : null;
+    const oCol=document.createElement('div'); oCol.innerHTML='<label class="lbl" style="font-size:12.5px">Options</label>';
+    oCol.appendChild(pjMultiOptionsDropdown('cond-o-'+cond._key, 'Select Options', q?q.options:[], cond.options, v=>{ cond.options=v; pjMarkDirty(); pjRenderForm(); }));
+    grid.appendChild(oCol);
+  } else grid.appendChild(document.createElement('div'));
+  const delCol=document.createElement('div');
+  const del=document.createElement('button'); del.className='pj-trash'; del.innerHTML=PJ_ICONS.trash; del.style.marginTop='22px';
+  del.onclick=onRemove;
+  delCol.appendChild(del); grid.appendChild(delCol);
+  wrap.appendChild(grid);
+  return wrap;
+}
+function pjRenderLogicBlock(logic, index, onRemove){
+  logic.conditionGroups.forEach(g=>g.conditions.forEach((c,i)=>{ if(!c._key) c._key=g.id+'_'+i; }));
+  const survey = SURVEYS.find(s=>s.id===logic.surveyId);
+  const collapsed = !!pjState.openLogicCollapsed[logic.id];
+  const block=document.createElement('div'); block.className='pj-logic-block';
+  const head=document.createElement('div'); head.className='pj-logic-head';
+  const chev=document.createElement('span'); chev.innerHTML=collapsed?PJ_ICONS.chevronDown:PJ_ICONS.chevronUp; chev.className='pj-dd-chevron'; chev.style.cssText='cursor:pointer;margin-left:auto';
+  const title=document.createElement('span'); title.textContent='Logic #'+(index+1); title.style.cursor='pointer';
+  const del=document.createElement('button'); del.className='pj-trash'; del.innerHTML=PJ_ICONS.trash; del.onclick=(e)=>{ e.stopPropagation(); onRemove(); };
+  const toggle=()=>{ pjState.openLogicCollapsed[logic.id]=!collapsed; pjRenderForm(); };
+  title.onclick=toggle; chev.onclick=toggle;
+  head.append(title, del, chev);
+  block.appendChild(head);
+  if(!collapsed){
+    const body=document.createElement('div');
+    const row1=document.createElement('div'); row1.className='pj-grid2';
+    const c1=document.createElement('div'); c1.innerHTML='<label class="lbl">Select Entity Type</label>';
+    c1.appendChild(pjPlainSelectDropdown('logic-entity-'+logic.id, ['Survey'], logic.entityType, v=>{ logic.entityType=v; pjMarkDirty(); }));
+    const c2=document.createElement('div'); c2.innerHTML='<label class="lbl">Select Survey</label>';
+    c2.appendChild(pjSearchableDropdown('logic-survey-'+logic.id, 'Select Survey', SURVEYS.map(s=>({value:s.id,label:s.name})), logic.surveyId, v=>{ logic.surveyId=v; logic.conditionGroups=[]; pjMarkDirty(); }));
+    row1.append(c1,c2); body.appendChild(row1);
+
+    const row2=document.createElement('div'); row2.className='pj-grid2';
+    const c3=document.createElement('div'); c3.innerHTML='<label class="lbl">Priority</label>';
+    c3.appendChild(pjPlainSelectDropdown('logic-prio-'+logic.id, PJ_PRIORITIES.map(x=>x.v), logic.priority, v=>{ logic.priority=v; pjMarkDirty(); }, v=>{ const pr=PJ_PRIORITIES.find(x=>x.v===v); return `${pr.ico} ${v}`; }));
+    const c4=document.createElement('div'); c4.innerHTML='<label class="lbl">Assign to</label>';
+    c4.appendChild(pjSingleUserDropdown('logic-assign-'+logic.id, 'Select Assignee', logic.assignTo, v=>{ logic.assignTo=v; pjMarkDirty(); pjRenderForm(); }));
+    row2.append(c3,c4); body.appendChild(row2);
+
+    const togRow=document.createElement('div'); togRow.className='pj-toggle-row'; togRow.style.marginBottom='20px';
+    togRow.innerHTML=`<span class="lbl" style="margin:0">Targeted Assignment for Collaborators</span>`;
+    const sw=document.createElement('div'); sw.className='pj-switch'+(logic.targetedAssignment?' on':''); sw.innerHTML='<div class="pj-knob"></div>';
+    sw.onclick=()=>{ logic.targetedAssignment=!logic.targetedAssignment; pjMarkDirty(); pjRenderForm(); };
+    togRow.appendChild(sw); body.appendChild(togRow);
+
+    const row3=document.createElement('div'); row3.className='pj-grid2';
+    const c5=document.createElement('div'); c5.innerHTML='<label class="lbl">Collaborators</label>';
+    c5.appendChild(pjMultiUserDropdown('logic-collab-'+logic.id, 'Select Collaborators', logic.collaborators, v=>{ logic.collaborators=v; pjMarkDirty(); pjRenderForm(); }));
+    const c6=document.createElement('div'); c6.innerHTML='<label class="lbl">Group Collaborators</label>';
+    c6.appendChild(pjMultiGroupDropdown('logic-gcollab-'+logic.id, 'Select Group Collaborators', logic.groupCollaborators, v=>{ logic.groupCollaborators=v; pjMarkDirty(); pjRenderForm(); }));
+    row3.append(c5,c6); body.appendChild(row3);
+
+    body.appendChild(pjRenderEscalationLevels(logic.escalationLevels, 'logic-'+logic.id+'-'));
+
+    const condWrap=document.createElement('div'); condWrap.style.marginTop='18px';
+    if(!logic.conditionGroups.length){
+      const addBtn=document.createElement('button'); addBtn.className='btn btn-light btn-sm'; addBtn.textContent='+ Add Condition';
+      addBtn.onclick=()=>{ logic.conditionGroups.push(emptyCondGroup()); pjMarkDirty(); pjRenderForm(); };
+      condWrap.appendChild(addBtn);
+    } else {
+      logic.conditionGroups.forEach((grp,gi)=>{
+        if(gi>0){ const orLbl=document.createElement('div'); orLbl.className='pj-cond-and'; orLbl.textContent='OR'; condWrap.appendChild(orLbl); }
+        const groupBox=document.createElement('div'); groupBox.className='pj-cond-group';
+        const groupDel=document.createElement('button'); groupDel.className='pj-trash pj-cond-group-del'; groupDel.innerHTML=PJ_ICONS.trash; groupDel.title='Remove group';
+        groupDel.onclick=()=>{ logic.conditionGroups.splice(gi,1); pjMarkDirty(); pjRenderForm(); };
+        groupBox.appendChild(groupDel);
+        grp.conditions.forEach((cond,i)=>{
+          if(i>0){ const and=document.createElement('div'); and.className='pj-cond-and'; and.textContent='AND'; groupBox.appendChild(and); }
+          groupBox.appendChild(pjRenderConditionRow(cond, survey, ()=>{
+            grp.conditions.splice(i,1);
+            if(!grp.conditions.length) logic.conditionGroups.splice(gi,1);
+            pjMarkDirty(); pjRenderForm();
+          }));
+        });
+        const andBtn=document.createElement('button'); andBtn.className='btn btn-light btn-sm'; andBtn.style.marginTop='10px'; andBtn.textContent='+ AND Condition';
+        andBtn.onclick=()=>{ grp.conditions.push({question:'',selType:'',options:[]}); pjMarkDirty(); pjRenderForm(); };
+        groupBox.appendChild(andBtn);
+        condWrap.appendChild(groupBox);
+      });
+      const orBtn=document.createElement('button'); orBtn.className='btn btn-light btn-sm'; orBtn.style.marginTop='14px'; orBtn.textContent='+ OR Group';
+      orBtn.onclick=()=>{ logic.conditionGroups.push(emptyCondGroup()); pjMarkDirty(); pjRenderForm(); };
+      condWrap.appendChild(orBtn);
+    }
+    body.appendChild(condWrap);
+    block.appendChild(body);
+  }
+  return block;
+}
+
+/* ---------- collapsible sections + Communication Setup ---------- */
+function pjCollapsibleCard(key, title, desc, bodyFn){
+  const card=document.createElement('div'); card.className='pj-collapse-card';
+  const head=document.createElement('div'); head.className='pj-collapse-head';
+  head.innerHTML=`<span>${esc(title)}</span><span class="pj-dd-chevron">${pjState.collapse[key]?PJ_ICONS.chevronUp:PJ_ICONS.chevronDown}</span>`;
+  head.onclick=()=>{ pjState.collapse[key]=!pjState.collapse[key]; pjRenderForm(); };
+  card.appendChild(head);
+  if(pjState.collapse[key]){
+    const body=document.createElement('div'); body.className='pj-collapse-body';
+    body.appendChild(bodyFn());
+    card.appendChild(body);
+  }
+  const descEl=document.createElement('div'); descEl.className='pj-collapse-desc'; descEl.textContent=desc;
+  card.appendChild(descEl);
+  return card;
+}
+function pjRenderCommsBody(comms){
+  const wrap=document.createElement('div');
+  const tabs=document.createElement('div'); tabs.className='pj-chan-tabs';
+  [{k:'Email',ico:'✉',enabled:true},{k:'Instagram',ico:'◎',enabled:false},{k:'Whatsapp',ico:'💬',enabled:false},{k:'SMS',ico:'▤',enabled:false}].forEach(c=>{
+    const b=document.createElement('button'); b.type='button'; b.className='pj-chan-tab'+(comms.activeChannel===c.k?' active':'');
+    b.innerHTML=`<span>${c.ico}</span><span>${c.k}</span>`;
+    if(!c.enabled) b.disabled=true; else b.onclick=()=>{ comms.activeChannel=c.k; pjMarkDirty(); pjRenderForm(); };
+    tabs.appendChild(b);
+  });
+  wrap.appendChild(tabs);
+  if(comms.activeChannel==='Email'){
+    const e=comms.email;
+    const head=document.createElement('div'); head.style.cssText='display:flex;align-items:center;gap:10px;margin-bottom:18px';
+    head.innerHTML=`<div style="width:36px;height:36px;border-radius:8px;background:var(--field);display:flex;align-items:center;justify-content:center">✉</div>
+      <div><div style="font-weight:600;font-size:14px">Email Configuration</div><div class="page-sub" style="margin:0">Configure email settings to send and receive messages.</div></div>`;
+    wrap.appendChild(head);
+    const mkField=(labelText,val,onInput,placeholder,type='text')=>{
+      const d=document.createElement('div'); d.innerHTML=`<label class="lbl">${labelText}</label>`;
+      const inp=document.createElement('input'); inp.type=type; inp.className='field'; inp.value=val; inp.placeholder=placeholder||'';
+      inp.oninput=()=>{ onInput(inp.value); pjMarkDirty(); };
+      d.appendChild(inp); return d;
+    };
+    const sectionLbl=(text)=>{ const l=document.createElement('div'); l.className='lbl'; l.style.cssText='font-weight:700;margin-top:18px'; l.textContent=text; return l; };
+    wrap.appendChild(sectionLbl('Connection Settings'));
+    const row1=document.createElement('div'); row1.className='pj-grid2';
+    row1.append(mkField('Hostname', e.hostname, v=>e.hostname=v, 'Enter Hostname'), mkField('Port', e.port, v=>e.port=v, '587'));
+    wrap.appendChild(row1);
+    wrap.appendChild(sectionLbl('Authentication'));
+    wrap.appendChild(mkField('Username', e.username, v=>e.username=v, 'Enter Username'));
+    wrap.appendChild(mkField('Password / App Token', e.password, v=>e.password=v, 'Enter Password or App Token', 'password'));
+    wrap.appendChild(sectionLbl('Sender Settings'));
+    wrap.appendChild(mkField('Sender Email', e.senderEmail, v=>e.senderEmail=v, 'Enter email'));
+    wrap.appendChild(sectionLbl('Security Options'));
+    [['SMTP Authentication','smtpAuth'],['SMTP TLS Enabled','smtpTLS']].forEach(([label,key])=>{
+      const tr=document.createElement('div'); tr.className='pj-toggle-row'; tr.style.marginTop='10px';
+      tr.innerHTML=`<span class="lbl" style="margin:0">${label}</span>`;
+      const sw=document.createElement('div'); sw.className='pj-switch'+(e[key]?' on':''); sw.innerHTML='<div class="pj-knob"></div>';
+      sw.onclick=()=>{ e[key]=!e[key]; pjMarkDirty(); pjRenderForm(); };
+      tr.appendChild(sw); wrap.appendChild(tr);
+    });
+    const propHead=document.createElement('div'); propHead.style.cssText='display:flex;justify-content:space-between;align-items:center;margin-top:18px';
+    propHead.innerHTML=`<span class="lbl" style="margin:0;font-weight:700">Custom Properties</span>`;
+    const addPropBtn=document.createElement('button'); addPropBtn.className='btn btn-primary btn-sm'; addPropBtn.textContent='+ Add Property';
+    addPropBtn.onclick=()=>{ e.customProps.push({name:'',value:''}); pjMarkDirty(); pjRenderForm(); };
+    propHead.appendChild(addPropBtn); wrap.appendChild(propHead);
+    e.customProps.forEach((prop,i)=>{
+      const row=document.createElement('div'); row.className='pj-prop-row'; row.style.marginTop='10px';
+      const nameInp=document.createElement('input'); nameInp.className='field'; nameInp.placeholder='Property name'; nameInp.value=prop.name;
+      nameInp.oninput=()=>{ prop.name=nameInp.value; pjMarkDirty(); };
+      const valInp=document.createElement('input'); valInp.className='field'; valInp.placeholder='Property value'; valInp.value=prop.value;
+      valInp.oninput=()=>{ prop.value=valInp.value; pjMarkDirty(); };
+      const del=document.createElement('button'); del.className='pj-trash'; del.innerHTML=PJ_ICONS.trash;
+      del.onclick=()=>{ e.customProps.splice(i,1); pjMarkDirty(); pjRenderForm(); };
+      row.append(nameInp, valInp, del);
+      wrap.appendChild(row);
+    });
+  } else {
+    const disabledMsg=document.createElement('div'); disabledMsg.className='hint'; disabledMsg.style.padding='10px 0';
+    disabledMsg.textContent=comms.activeChannel+' is not configured for this account.';
+    wrap.appendChild(disabledMsg);
+  }
+  return wrap;
+}
+
+/* ---------- CREATE / EDIT form ---------- */
+function pjRenderForm(){
+  const sb=$('#sheetBody'); const scrollY=sb?sb.scrollTop:0;
+  const isEdit=!!pjState.editingId;
+  const p=pjState.draft;
+  const container=document.createElement('div');
+
+  const backRow=document.createElement('div'); backRow.className='pj-back-row';
+  backRow.innerHTML=`<span class="pj-chev">${PJ_ICONS.chevronLeft}</span> ${isEdit?'Edit Project':'Create New Project'}`;
+  backRow.onclick=()=>pjAttemptNav(()=>pjGoList());
+  container.appendChild(backRow);
+  container.appendChild(Object.assign(document.createElement('div'),{style:'height:20px'}));
+
+  const nameWrap=document.createElement('div');
+  nameWrap.innerHTML='<label class="lbl">Project Name <span class="req">*</span></label>';
+  const fieldWrap=document.createElement('div'); fieldWrap.style.cssText='position:relative';
+  const nameInput=document.createElement('input'); nameInput.type='text'; nameInput.className='field'; nameInput.placeholder='Project Name'; nameInput.maxLength=100; nameInput.value=p.name;
+  nameInput.style.paddingRight='96px';
+  const count=document.createElement('span'); count.className='hint'; count.style.cssText='position:absolute;right:14px;top:50%;transform:translateY(-50%);margin:0';
+  count.textContent=`${p.name.length}/100 characters`;
+  nameInput.oninput=()=>{ p.name=nameInput.value; count.textContent=`${p.name.length}/100 characters`; pjMarkDirty(); pjSyncSaveBtn(); };
+  fieldWrap.append(nameInput, count);
+  nameWrap.appendChild(fieldWrap);
+  container.appendChild(nameWrap);
+  container.appendChild(Object.assign(document.createElement('div'),{style:'height:20px'}));
+
+  const rowBrand=document.createElement('div'); rowBrand.className='pj-grid2';
+  const brandCol=document.createElement('div'); brandCol.innerHTML='<label class="lbl">Brand <span class="req">*</span></label>';
+  brandCol.appendChild(pjPlainSelectDropdown('proj-brand', BRANDS, p.brand, v=>{ p.brand=v; pjMarkDirty(); }));
+  const assigneeCol=document.createElement('div'); assigneeCol.innerHTML='<label class="lbl">Default Assigned To</label>';
+  assigneeCol.appendChild(pjSingleUserDropdown('proj-assignee', 'Select Assignee', p.defaultAssignee, v=>{ p.defaultAssignee=v; pjMarkDirty(); pjRenderForm(); }));
+  rowBrand.append(brandCol, assigneeCol);
+  container.appendChild(rowBrand);
+
+  const togRow=document.createElement('div'); togRow.className='pj-toggle-row';
+  togRow.innerHTML=`<span class="lbl" style="margin:0">Targeted Assignment for Collaborators</span>`;
+  const sw=document.createElement('div'); sw.className='pj-switch'+(p.targetedAssignment?' on':''); sw.innerHTML='<div class="pj-knob"></div>';
+  sw.onclick=()=>{ p.targetedAssignment=!p.targetedAssignment; pjMarkDirty(); pjRenderForm(); };
+  togRow.appendChild(sw);
+  container.appendChild(togRow);
+  container.appendChild(Object.assign(document.createElement('div'),{style:'height:20px'}));
+
+  const rowCollab=document.createElement('div'); rowCollab.className='pj-grid2';
+  const collabCol=document.createElement('div'); collabCol.innerHTML='<label class="lbl">Collaborators</label>';
+  collabCol.appendChild(pjMultiUserDropdown('proj-collab', 'Select Collaborators', p.collaborators, v=>{ p.collaborators=v; pjMarkDirty(); pjRenderForm(); }));
+  const gcollabCol=document.createElement('div'); gcollabCol.innerHTML='<label class="lbl">Group Collaborators</label>';
+  gcollabCol.appendChild(pjMultiGroupDropdown('proj-gcollab', 'Select Group Collaborators', p.groupCollaborators, v=>{ p.groupCollaborators=v; pjMarkDirty(); pjRenderForm(); }));
+  rowCollab.append(collabCol, gcollabCol);
+  container.appendChild(rowCollab);
+
+  container.appendChild(document.createElement('hr')).className='pj-sep';
+  container.appendChild(pjRenderEscalationLevels(p.escalationLevels, 'proj-'));
+  container.appendChild(document.createElement('hr')).className='pj-sep';
+
+  p.logics.forEach((logic,i)=>{ container.appendChild(pjRenderLogicBlock(logic, i, ()=>{ p.logics.splice(i,1); pjMarkDirty(); pjRenderForm(); })); });
+  const addLogicBtn=document.createElement('button'); addLogicBtn.className='btn btn-primary btn-sm'; addLogicBtn.style.marginTop='16px'; addLogicBtn.textContent='+ Add Logic';
+  addLogicBtn.onclick=()=>{ p.logics.push(emptyLogic()); pjMarkDirty(); pjRenderForm(); };
+  container.appendChild(addLogicBtn);
+
+  container.appendChild(pjCollapsibleCard('comms', 'Communication Setup', 'Customize how project communication is handled.', ()=>pjRenderCommsBody(p.comms)));
+  container.appendChild(pjCollapsibleCard('escalation', 'Escalation Settings', 'Configure skip escalation behaviour in the project.', ()=>{
+    const b=document.createElement('div');
+    const tr=document.createElement('div'); tr.className='pj-toggle-row'; tr.style.cssText='background:var(--field);border:none;padding:14px';
+    tr.innerHTML=`<div><div style="font-weight:600;font-size:13.5px">Skip Escalations</div><div class="page-sub" style="margin:0">Pause all project-level escalations</div></div>`;
+    const sw2=document.createElement('div'); sw2.className='pj-switch'+(p.escalationSettings.skipEscalations?' on':''); sw2.innerHTML='<div class="pj-knob"></div>';
+    sw2.onclick=()=>{ p.escalationSettings.skipEscalations=!p.escalationSettings.skipEscalations; pjMarkDirty(); pjRenderForm(); };
+    tr.appendChild(sw2); b.appendChild(tr);
+    if(p.escalationSettings.skipEscalations){
+      const dayWrap=document.createElement('div'); dayWrap.style.marginTop='16px';
+      const dayLbl=document.createElement('div'); dayLbl.className='lbl'; dayLbl.textContent='Select Days to Skip Escalations';
+      dayWrap.appendChild(dayLbl);
+      const chipBox=document.createElement('div'); chipBox.style.cssText='border:1px solid var(--line);border-radius:9px;padding:16px;display:flex;gap:10px;flex-wrap:wrap;';
+      ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'].forEach(d=>{
+        const on=p.escalationSettings.skipDays.includes(d);
+        const chip=document.createElement('button'); chip.type='button'; chip.className='pj-day-chip'+(on?' on':''); chip.textContent=d;
+        chip.onclick=()=>{ p.escalationSettings.skipDays = on ? p.escalationSettings.skipDays.filter(x=>x!==d) : p.escalationSettings.skipDays.concat([d]); pjMarkDirty(); pjRenderForm(); };
+        chipBox.appendChild(chip);
+      });
+      dayWrap.appendChild(chipBox);
+      if(p.escalationSettings.skipDays.length){
+        const summary=document.createElement('div'); summary.className='page-sub'; summary.style.marginTop='8px';
+        summary.textContent='Escalations will be skipped on: '+p.escalationSettings.skipDays.join(', ');
+        dayWrap.appendChild(summary);
+      }
+      b.appendChild(dayWrap);
+    }
+    return b;
+  }));
+  container.appendChild(pjCollapsibleCard('notifications', 'Email Notifications', 'Enable the events you want to receive email notifications for. You can change these settings anytime.', ()=>{
+    const b=document.createElement('div');
+    [
+      ['ticketCreation','Ticket Creation','Receive email when a new ticket is created in this project'],
+      ['ticketStatus','Ticket Status','Receive email when a ticket status is updated'],
+      ['priorityChanged','Priority Changed','Receive email when ticket priority is modified'],
+      ['ticketAssignee','Ticket Assignee','Receive email when a ticket is assigned to you or updated'],
+      ['ticketEscalation','Ticket Escalation','Receive email when a ticket is escalated'],
+      ['commentOrMentions','Comment or Mentions','Receive email when someone comments or mention someone on a ticket'],
+      ['descriptionAttachments','Description and Attachments','Receive email when someone adds or update description or attachments on a ticket'],
+      ['ticketCollaborators','Ticket Collaborators','Receive email when a new collaborator or group collaborators are added to a ticket'],
+      ['ticketDueDate','Ticket Due Date','Receive email reminder when ticket due date is approaching'],
+    ].forEach(([key,title,sub])=>{
+      const row=document.createElement('div'); row.className='pj-notif-row';
+      row.innerHTML=`<div><div class="pj-notif-title">${title}</div><div class="pj-notif-sub">${sub}</div></div>`;
+      const sw3=document.createElement('div'); sw3.className='pj-switch'+(p.notifications[key]?' on':''); sw3.innerHTML='<div class="pj-knob"></div>';
+      sw3.onclick=()=>{ p.notifications[key]=!p.notifications[key]; pjMarkDirty(); pjRenderForm(); };
+      row.appendChild(sw3);
+      b.appendChild(row);
+    });
+    return b;
+  }));
+
+  const verifHost=document.createElement('div');
+  verifHost.innerHTML=verifProjectSectionHTML(p.project_id); /* VERIF_FEATURE hook */
+  container.appendChild(verifHost);
+
+  const saveRow=document.createElement('div'); saveRow.className='pj-save-row';
+  const cancelBtn=document.createElement('button'); cancelBtn.className='btn btn-light'; cancelBtn.textContent='Cancel';
+  cancelBtn.onclick=()=>pjAttemptNav(()=>pjGoList());
+  const saveBtn=document.createElement('button'); saveBtn.className='btn btn-primary'; saveBtn.id='pjSaveBtn'; saveBtn.textContent='Save';
+  saveBtn.disabled=!(p.name.trim().length>0);
+  saveBtn.onclick=()=>{
+    if(isEdit){ const idx=PROJECTS.findIndex(x=>x.project_id===pjState.editingId); PROJECTS[idx]=JSON.parse(JSON.stringify(p)); }
+    else { p.project_id=pjUid('proj'); p.code=p.code||makeProjectCode(p.name); PROJECTS.push(JSON.parse(JSON.stringify(p))); }
+    pjState.isDirty=false; appUnsavedGuard=null;
+    toast(isEdit?'Project updated':'Project created', p.name);
+    pjGoList();
+  };
+  saveRow.append(cancelBtn, saveBtn);
+  container.appendChild(saveRow);
+
+  mount().innerHTML=''; mount().appendChild(container);
+  verifWireProjectSection(p.project_id); /* VERIF_FEATURE hook */
+  if(sb) sb.scrollTop=scrollY;
+}
+function pjSyncSaveBtn(){ const b=document.getElementById('pjSaveBtn'); if(b) b.disabled=!(pjState.draft.name.trim().length>0); }
+
+document.addEventListener('click', (e)=>{
+  if(pjState.draft){
+    if(pjState.openDropdown && !e.target.closest('.pj-dd')) pjCloseDropdowns();
+    if(pjState.openInfoTip && !e.target.closest('.pj-info-ico') && !e.target.closest('.pj-info-tip')){ pjState.openInfoTip=false; pjRenderForm(); }
+  }
+  if(pjState.openCollabPopover && !e.target.closest('.pj-icon-btn') && !e.target.closest('.pj-collab-popover')){ pjState.openCollabPopover=null; pjRenderList(); }
+});
 
 /* ============================================================ AGENTS REPORTS */
 let agentSort={key:'volume',dir:-1};
@@ -2503,8 +3305,8 @@ $$('.nav-parent').forEach(p=>p.onclick=()=>{
   if(!wasOpen) grp.classList.add('open');
 });
 $('#navToggle').onclick=()=>$('#sidebar').classList.toggle('collapsed');
-$$('.nav-child').forEach(n=>n.onclick=()=>go(n.dataset.route));
-$$('[data-route]').forEach(n=>{if(n.classList.contains('nav-item')&&!n.classList.contains('nav-parent'))n.onclick=()=>go(n.dataset.route);});
+$$('.nav-child').forEach(n=>n.onclick=()=>{const target=n.dataset.route; if(appUnsavedGuard) appUnsavedGuard(()=>go(target)); else go(target);});
+$$('[data-route]').forEach(n=>{if(n.classList.contains('nav-item')&&!n.classList.contains('nav-parent'))n.onclick=()=>{const target=n.dataset.route; if(appUnsavedGuard) appUnsavedGuard(()=>go(target)); else go(target);};});
 window.go=go;
 window.router=router;
 if(typeof M!=='undefined' && M.bootShell) M.bootShell();
