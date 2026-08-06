@@ -96,6 +96,15 @@ function updateStatusIndicator(){
   }
 }
 
+// Formats a Date (or ISO/datetime-local string) into the "YYYY-MM-DDTHH:mm"
+// shape a <input type="datetime-local"> value expects, in local time.
+function toDatetimeLocalValue(d){
+  if(!d) return '';
+  const dt = d instanceof Date ? d : new Date(d);
+  if(isNaN(dt)) return '';
+  const pad = n => String(n).padStart(2,'0');
+  return `${dt.getFullYear()}-${pad(dt.getMonth()+1)}-${pad(dt.getDate())}T${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+}
 function openStatusPicker(){
   const status = StatusService.getCurrentUserStatus();
   const modal = document.createElement('div');
@@ -126,13 +135,13 @@ function openStatusPicker(){
         <div id="datePickerWrap" style="display:${status.status === 'not_available' ? 'block' : 'none'};margin-top:16px">
           <div style="margin-bottom:12px">
             <label class="status-label-text" style="display:block;font-size:13px;font-weight:600;color:var(--text);margin-bottom:6px">From</label>
-            <input type="date" id="fromDateInput" class="status-date-input" value="${status.fromDate || ''}" min="${new Date().toISOString().split('T')[0]}" style="width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;box-sizing:border-box">
+            <input type="datetime-local" id="fromDateInput" class="status-date-input" value="${toDatetimeLocalValue(status.fromDate)}" min="${toDatetimeLocalValue(new Date())}" style="width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;box-sizing:border-box">
           </div>
           <div>
             <label class="status-label-text" style="display:block;font-size:13px;font-weight:600;color:var(--text);margin-bottom:6px">Till</label>
-            <input type="date" id="tillDateInput" class="status-date-input" value="${status.tillDate || ''}" min="${new Date().toISOString().split('T')[0]}" style="width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;box-sizing:border-box">
+            <input type="datetime-local" id="tillDateInput" class="status-date-input" value="${toDatetimeLocalValue(status.tillDate)}" min="${toDatetimeLocalValue(new Date())}" style="width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;box-sizing:border-box">
           </div>
-          <div class="status-helper-text" style="font-size:12px;color:var(--muted);margin-top:6px">Select your unavailable period</div>
+          <div class="status-helper-text" style="font-size:12px;color:var(--muted);margin-top:6px">Select your unavailable period — even an hour or two is fine</div>
         </div>
       </div>
       <div class="status-modal-footer" style="padding:16px 20px;border-top:1px solid var(--line);display:flex;gap:10px;justify-content:flex-end">
