@@ -26,14 +26,9 @@ const CURRENT_USER = {email:'rahul.ukey@karnival.com', name:'Rahul Ukey'};   // 
 const getAgentStatusDotClass = email => {
   const status = StatusService.getAgentStatus(email);
   if(!status) return '';
-  if(status.status === 'not_available') {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const [fromY, fromM, fromD] = status.fromDate.split('-');
-    const fromDate = new Date(fromY, fromM - 1, fromD, 0, 0, 0, 0);
-    const [tillY, tillM, tillD] = status.tillDate.split('-');
-    const tillDate = new Date(tillY, tillM - 1, tillD, 0, 0, 0, 0);
-    if(today >= fromDate && today <= tillDate) return 'unavailable';
+  if(status.status === 'not_available' && status.fromDate && status.tillDate) {
+    const now = new Date();
+    if(now >= new Date(status.fromDate) && now <= new Date(status.tillDate)) return 'unavailable';
   }
   return '';
 };
@@ -56,40 +51,27 @@ function updateStatusIndicator(){
   const profileStatusText = $('#profileStatusText');
   const profileUnavailableInfo = $('#profileUnavailableInfo');
 
-  // Check if unavailability is currently active (today is within the date range)
+  // Check if leave is currently active (right now falls within the from/till window)
   let isCurrentlyUnavailable = false;
   if(status.status === 'not_available' && status.fromDate && status.tillDate) {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const [fromY, fromM, fromD] = status.fromDate.split('-');
-    const fromDateObj = new Date(fromY, fromM - 1, fromD, 0, 0, 0, 0);
-    const [tillY, tillM, tillD] = status.tillDate.split('-');
-    const tillDateObj = new Date(tillY, tillM - 1, tillD, 0, 0, 0, 0);
-    isCurrentlyUnavailable = today >= fromDateObj && today <= tillDateObj;
+    const now = new Date();
+    isCurrentlyUnavailable = now >= new Date(status.fromDate) && now <= new Date(status.tillDate);
   }
 
   if(dot){
     dot.className = `status-dot ${isCurrentlyUnavailable ? 'unavailable' : 'available'}`;
   }
 
-  // Update profile dropdown — status button shows only the status word based on TODAY's availability
+  // Update profile dropdown — status button shows only the status word based on right-now availability
   if(profileStatusText){
-    if(isCurrentlyUnavailable) {
-      profileStatusText.textContent = 'Unavailable';
-    } else {
-      profileStatusText.textContent = 'Available';
-    }
+    profileStatusText.textContent = isCurrentlyUnavailable ? 'On leave' : 'Available';
   }
 
-  // Update unavailable info section — shows date range if applicable
+  // Update leave info section — shows date range if applicable
   if(profileUnavailableInfo){
     if(status.status === 'not_available' && status.fromDate && status.tillDate) {
       const formatted = StatusService.formatDateRange(status.fromDate, status.tillDate);
-      if(isCurrentlyUnavailable){
-        profileUnavailableInfo.textContent = `Unavailable: ${formatted}`;
-      } else {
-        profileUnavailableInfo.textContent = `Unavailable period: ${formatted}`;
-      }
+      profileUnavailableInfo.textContent = isCurrentlyUnavailable ? `On leave: ${formatted}` : `Leave scheduled: ${formatted}`;
     } else {
       profileUnavailableInfo.textContent = '';
     }
@@ -105,6 +87,19 @@ function toDatetimeLocalValue(d){
   const pad = n => String(n).padStart(2,'0');
   return `${dt.getFullYear()}-${pad(dt.getMonth()+1)}-${pad(dt.getDate())}T${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
 }
+// Default leave window: today 9am-6pm, or tomorrow 9am-6pm if today's 9am has already passed.
+function defaultLeaveWindow(){
+  const now = new Date();
+  const day = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  let from = new Date(day); from.setHours(9,0,0,0);
+  let till = new Date(day); till.setHours(18,0,0,0);
+  if(from < now){
+    day.setDate(day.getDate()+1);
+    from = new Date(day); from.setHours(9,0,0,0);
+    till = new Date(day); till.setHours(18,0,0,0);
+  }
+  return {from, till};
+}
 function openStatusPicker(){
   const status = StatusService.getCurrentUserStatus();
   const modal = document.createElement('div');
@@ -118,7 +113,7 @@ function openStatusPicker(){
   modal.innerHTML = `
     <div class="status-modal" style="background:#fff;border-radius:12px;box-shadow:0 10px 40px rgba(0,0,0,0.15);width:90%;max-width:420px;animation:slideUp 0.2s ease-out">
       <div class="status-modal-header" style="padding:20px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between">
-        <h3 style="margin:0;font-size:16px;font-weight:600;color:var(--text)">Update Availability Status</h3>
+        <h3 style="margin:0;font-size:16px;font-weight:600;color:var(--text)">Mark your leave</h3>
         <button class="modal-close" onclick="document.getElementById('statusModal').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--muted);padding:0;width:24px;height:24px;display:flex;align-items:center;justify-content:center">✕</button>
       </div>
       <div class="status-modal-body" style="padding:20px">
@@ -129,7 +124,7 @@ function openStatusPicker(){
           </label>
           <label class="status-radio" style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:10px;border-radius:8px;transition:background 0.2s">
             <input type="radio" name="status" value="not_available" ${status.status === 'not_available' ? 'checked' : ''} style="cursor:pointer;width:18px;height:18px">
-            <span style="font-size:14px;font-weight:500;color:var(--text)">Not Available</span>
+            <span style="font-size:14px;font-weight:500;color:var(--text)">On leave</span>
           </label>
         </div>
         <div id="datePickerWrap" style="display:${status.status === 'not_available' ? 'block' : 'none'};margin-top:16px">
@@ -137,11 +132,14 @@ function openStatusPicker(){
             <label class="status-label-text" style="display:block;font-size:13px;font-weight:600;color:var(--text);margin-bottom:6px">From</label>
             <input type="datetime-local" id="fromDateInput" class="status-date-input" value="${toDatetimeLocalValue(status.fromDate)}" min="${toDatetimeLocalValue(new Date())}" style="width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;box-sizing:border-box">
           </div>
-          <div>
+          <div style="margin-bottom:12px">
             <label class="status-label-text" style="display:block;font-size:13px;font-weight:600;color:var(--text);margin-bottom:6px">Till</label>
             <input type="datetime-local" id="tillDateInput" class="status-date-input" value="${toDatetimeLocalValue(status.tillDate)}" min="${toDatetimeLocalValue(new Date())}" style="width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;box-sizing:border-box">
           </div>
-          <div class="status-helper-text" style="font-size:12px;color:var(--muted);margin-top:6px">Select your unavailable period — even an hour or two is fine</div>
+          <div class="status-info-text" style="display:flex;gap:8px;align-items:flex-start;background:var(--primary-050);border-radius:8px;padding:10px 12px;font-size:12.5px;color:var(--text);line-height:1.5">
+            <span style="flex-shrink:0;margin-top:1px">ℹ️</span>
+            <span>During this period, you won't be assigned any new tickets.</span>
+          </div>
         </div>
       </div>
       <div class="status-modal-footer" style="padding:16px 20px;border-top:1px solid var(--line);display:flex;gap:10px;justify-content:flex-end">
@@ -165,6 +163,10 @@ function openStatusPicker(){
       if(!isUnavailable) {
         fromDateInput.value = '';
         tillDateInput.value = '';
+      } else if(!fromDateInput.value && !tillDateInput.value) {
+        const {from, till} = defaultLeaveWindow();
+        fromDateInput.value = toDatetimeLocalValue(from);
+        tillDateInput.value = toDatetimeLocalValue(till);
       }
     };
   });
@@ -192,7 +194,7 @@ function openStatusPicker(){
         toast('Status Updated', 'You are now available');
       } else {
         const formatted = StatusService.formatDateRange(fromDate, tillDate);
-        toast('Status Updated', `Not available from ${formatted}`);
+        toast('Leave Marked', `On leave from ${formatted}`);
       }
       modal.remove();
       hideModalRoot();
@@ -210,13 +212,13 @@ function getAssigneeOptionsHTML(currentAssignee = null, includeUnavailable = tru
     const isSelected = currentAssignee === a.email;
     const status = StatusService.getAgentStatus(a.email);
     const label = status.status === 'not_available' && status.fromDate && status.tillDate
-      ? `${a.name} (unavailable: ${StatusService.formatDateRange(status.fromDate, status.tillDate)})`
+      ? `${a.name} (on leave: ${StatusService.formatDateRange(status.fromDate, status.tillDate)})`
       : a.name;
 
     if(isAvailable || isSelected){
       available.push(`<option value="${a.email}" ${isSelected ? 'selected' : ''}>${label}</option>`);
     } else if(includeUnavailable){
-      const suffix = label.includes('(unavailable') ? '' : ' (unavailable)';
+      const suffix = label.includes('(on leave') ? '' : ' (on leave)';
       unavailable.push(`<option value="${a.email}" disabled style="color:#999">${label}${suffix}</option>`);
     }
   });
@@ -356,6 +358,13 @@ function renderHome(){
 
 const TA_STATUSES = ["Open","In Progress","Under Verification","Closed","Resolved","Escalated","Reopened","Auto Closed"];
 const TA_DRILL_COLOR = "#4ADE80";
+// Reuses the same status→color mapping as the KPI cards and badges elsewhere
+// in the app (--st-* tokens) so a status means the same color everywhere.
+const TA_STATUS_COLOR = {
+  "Open":"var(--st-open)", "In Progress":"var(--st-prog)", "Under Verification":"var(--st-verify)",
+  "Resolved":"var(--st-res)", "Closed":"var(--st-closed)", "Auto Closed":"var(--st-closed)",
+  "Escalated":"var(--st-esc)", "Reopened":"var(--st-reopen)",
+};
 
 /* Realistic dummy-data generator: every brand/level gets its own randomized
    (but plausibly-shaped) split, so no two brands or levels end up with
@@ -761,12 +770,17 @@ function renderTAHeader(){
   const rows = TA_STATUSES.map((s,i)=>({name:s, count:totals[i]})).sort((a,b)=>b.count-a.count);
   const max = Math.max(1, rows[0].count);
   card.innerHTML = `
-    <div class="ta-total-num">${grand.toLocaleString()}</div>
-    <div class="ta-total-sub">total tickets &middot; ${esc(taDateLabel(taState,"dateRange"))}${taState.scopeMode!=="Overall" ? " &middot; scoped to "+esc(taState.scopeMode.toLowerCase()) : ""}</div>
+    <div class="ta-total-row">
+      <div class="ta-total-ico"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/><path d="M13 9v2M13 13v2"/></svg></div>
+      <div>
+        <div class="ta-total-num">${grand.toLocaleString()}</div>
+        <div class="ta-total-sub">total tickets &middot; ${esc(taDateLabel(taState,"dateRange"))}${taState.scopeMode!=="Overall" ? " &middot; scoped to "+esc(taState.scopeMode.toLowerCase()) : ""}</div>
+      </div>
+    </div>
     ${rows.map(r=>`
       <div class="ta-bar-row" data-status="${esc(r.name)}" title="${esc(r.name)}: ${r.count.toLocaleString()}" style="opacity:${taState.selectedStatus && taState.selectedStatus!==r.name ? '0.6':'1'};">
         <div class="ta-lbl">${esc(r.name)}</div>
-        <div class="ta-track"><div class="ta-fill" style="width:${Math.round(r.count/max*100)}%; background:${TA_DRILL_COLOR}"></div></div>
+        <div class="ta-track"><div class="ta-fill" style="width:${Math.round(r.count/max*100)}%; background:${TA_STATUS_COLOR[r.name]||TA_DRILL_COLOR}"></div></div>
         <div class="ta-val">${r.count.toLocaleString()}</div>
       </div>
     `).join("")}
@@ -1229,7 +1243,10 @@ function renderTAPerf(){
     '</tr></thead><tbody>'+
       pageRows.map(r=>'<tr><td>'+esc(r.name)+'</td><td class="ta-num">'+r.open.toLocaleString()+'</td><td class="ta-num">'+r.closed.toLocaleString()+'</td><td class="ta-num">'+r.fcr.toLocaleString()+'</td><td class="ta-num">'+r.total.toLocaleString()+'</td><td class="ta-num">'+r.openRate+'%</td><td class="ta-num">'+r.closureRate+'%</td><td class="ta-num">'+r.fcrRate+'%</td></tr>').join("")+
     '</tbody>';
-  card.appendChild(tbl);
+  const tblWrap = document.createElement("div");
+  tblWrap.className = "ta-perf-table-wrap";
+  tblWrap.appendChild(tbl);
+  card.appendChild(tblWrap);
   tbl.querySelectorAll("th[data-col]").forEach(h=>{
     h.onclick = ()=>{
       const col = h.dataset.col;
@@ -1322,8 +1339,10 @@ function injectTAStyles(){
     .ta-custom-dates input{border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:12.5px;font-family:inherit;}
     .ta-header-card{border:1px solid var(--line);border-radius:12px;padding:18px 20px;background:#fff;margin-bottom:20px;}
     .ta-card-title{font-size:15px;font-weight:600;margin:0 0 14px;color:var(--ink);}
-    .ta-total-num{font-size:30px;font-weight:600;color:var(--ink);}
-    .ta-total-sub{font-size:12.5px;color:var(--muted);margin-bottom:14px;}
+    .ta-total-row{display:flex;align-items:center;gap:12px;margin-bottom:14px;}
+    .ta-total-ico{width:38px;height:38px;border-radius:10px;background:var(--primary-050);color:var(--primary);display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+    .ta-total-num{font-size:26px;font-weight:600;color:var(--ink);line-height:1.15;}
+    .ta-total-sub{font-size:12.5px;color:var(--ink-2);margin-top:2px;}
     .ta-bar-row{display:flex;align-items:center;gap:10px;margin-bottom:9px;cursor:pointer;}
     .ta-bar-row .ta-lbl{width:160px;font-size:12.5px;color:var(--ink);flex-shrink:0;}
     .ta-bar-row .ta-track{flex:1;background:var(--bg);border-radius:4px;height:20px;position:relative;}
@@ -1353,7 +1372,8 @@ function injectTAStyles(){
     .ta-oc-stack{height:100%;border-radius:4px;display:flex;overflow:hidden;background:var(--bg);}
     .ta-oc-seg{height:100%;}
     .ta-oc-row .ta-val{width:190px;text-align:right;font-size:12px;color:var(--muted);flex-shrink:0;}
-    table.ta-perf-table{width:100%;border-collapse:collapse;font-size:13px;}
+    .ta-perf-table-wrap{width:100%;overflow-x:auto;}
+    table.ta-perf-table{width:100%;min-width:640px;border-collapse:collapse;font-size:13px;}
     table.ta-perf-table th{text-align:left;padding:9px 8px;border-bottom:1px solid var(--line-2);font-weight:600;color:var(--ink);cursor:pointer;white-space:nowrap;}
     table.ta-perf-table th.ta-num, table.ta-perf-table td.ta-num{text-align:right;}
     table.ta-perf-table td{padding:11px 8px;border-bottom:1px solid var(--line-2);color:var(--ink);}
@@ -2155,7 +2175,7 @@ function paintBulkBar(){
     <div class="bb-actions">
       <button class="btn btn-light btn-sm" id="bbAssignMe">👤 Assign to me</button>
       <select class="select bb-sel" id="bbAssign"><option value="">Assign to…</option>
-        <optgroup label="Agents">${AGENTS.map(a=>{const s=StatusService.getAgentStatus(a.email);return `<option value="a:${a.email}" ${StatusService.isAgentAvailable(a.email)?'':'disabled'}>${a.name}${s.status==='not_available'&&s.fromDate&&s.tillDate?` (unavailable: ${StatusService.formatDateRange(s.fromDate,s.tillDate)})`:''}</option>`;}).join('')}</optgroup>
+        <optgroup label="Agents">${AGENTS.map(a=>{const s=StatusService.getAgentStatus(a.email);return `<option value="a:${a.email}" ${StatusService.isAgentAvailable(a.email)?'':'disabled'}>${a.name}${s.status==='not_available'&&s.fromDate&&s.tillDate?` (on leave: ${StatusService.formatDateRange(s.fromDate,s.tillDate)})`:''}</option>`;}).join('')}</optgroup>
         <optgroup label="Groups">${GROUPS.map(g=>`<option value="g:${esc(g)}">${esc(g)}</option>`).join('')}</optgroup></select>
       <button class="btn btn-primary btn-sm" id="bbAssignGo" hidden>Assign</button>
       <select class="select bb-sel" id="bbStatus"><option value="">Status…</option>${ENUM.status.map(s=>`<option value="${s}">${statusLabel(s)}</option>`).join('')}</select>
